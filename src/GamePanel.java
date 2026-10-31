@@ -1,6 +1,7 @@
 import javax.swing.AbstractAction;
 import javax.swing.JPanel;
 import javax.swing.KeyStroke;
+import javax.imageio.ImageIO;
 import java.awt.Color;
 import java.awt.Font;
 import java.awt.FontMetrics;
@@ -9,30 +10,50 @@ import java.awt.Graphics;
 import java.awt.Graphics2D;
 import java.awt.Point;
 import java.awt.RenderingHints;
+import java.awt.image.BufferedImage;
 import java.awt.event.ActionEvent;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.awt.geom.Path2D;
 import java.awt.RadialGradientPaint;
+import java.io.File;
+import java.io.IOException;
+import java.io.InputStream;
 import java.util.HashSet;
 import java.util.Set;
 
 public class GamePanel extends JPanel {
     private static final long serialVersionUID = 1L;
-    private enum Screen { MENU, PLAYING, PAUSED, VICTORY, GAME_OVER }
+    private enum Screen { MENU, LEVEL_SELECT, PLAYING, PAUSED, VICTORY, GAME_OVER }
 
     private static final int WIDTH = MuseumMap.WIDTH;
     private static final int HEIGHT = MuseumMap.HEIGHT;
     private static final Color GOLD = new Color(231, 190, 105);
     private static final Color INK = new Color(15, 17, 24);
+    private static final int SPRITE_FRAME_WIDTH = 80;
+    private static final int SPRITE_FRAME_HEIGHT = 128;
+    private static final int SPRITE_COLUMNS = 6;
+    private static final int SPRITE_ROWS = 20;
+    private static final int SPRITE_WIDTH = 32;
+    private static final int SPRITE_HEIGHT = 51;
+    private static final int[] ACTION_ROW_START = {0, 4, 8, 12, 16};
+    private static final int IDLE_ACTION = 0;
+    private static final int WALK_ACTION = 1;
+    private static final int RUN_ACTION = 2;
+    private static final int SNEAK_ACTION = 3;
 
     private final Set<String> pressedKeys = new HashSet<>();
     private final GameLoop gameLoop;
+    private final LevelManager levelManager = new LevelManager();
+    private final BufferedImage[][] playerSpriteFrames;
     private GameWorld world;
+    private LevelManager.Result lastResult;
     private Screen screen = Screen.MENU;
+    private int selectedLevel;
     private long animationFrame;
 
     public GamePanel() {
+        playerSpriteFrames = loadPlayerSpriteFrames();
         setPreferredSize(new java.awt.Dimension(WIDTH, HEIGHT));
         setFocusable(true);
         setBackground(INK);
@@ -56,8 +77,10 @@ public class GamePanel extends JPanel {
         bindMove("D", "right", true);
         bindMove("RIGHT", "right", true);
         bindMove("SHIFT", "sprint", true);
+        bindMove("CONTROL", "sneak", true);
         bindMove("E", "interact", true);
         bindMove("F", "steal", true);
+        bindMove("Q", "distract", true);
         bindMove("W", "up", false);
         bindMove("UP", "up", false);
         bindMove("S", "down", false);
@@ -67,22 +90,28 @@ public class GamePanel extends JPanel {
         bindMove("D", "right", false);
         bindMove("RIGHT", "right", false);
         bindMove("SHIFT", "sprint", false);
+        bindMove("CONTROL", "sneak", false);
         bindMove("E", "interact", false);
         bindMove("F", "steal", false);
+        bindMove("Q", "distract", false);
         bindAction("P", "pause", () -> togglePause());
         bindAction("ESCAPE", "escape", () -> handleEscape());
         bindAction("ENTER", "enter", () -> {
-            if (screen == Screen.MENU) startGame();
+            if (screen == Screen.MENU) screen = Screen.LEVEL_SELECT;
+            else if (screen == Screen.LEVEL_SELECT) startSelectedLevel();
             else if (screen == Screen.PAUSED) resumeGame();
-            else if (screen == Screen.VICTORY || screen == Screen.GAME_OVER) startGame();
+            else if (screen == Screen.VICTORY || screen == Screen.GAME_OVER) startGame(selectedLevel);
+            repaint();
         });
         bindAction("SPACE", "space", () -> {
-            if (screen == Screen.MENU) startGame();
+            if (screen == Screen.MENU) screen = Screen.LEVEL_SELECT;
+            else if (screen == Screen.LEVEL_SELECT) startSelectedLevel();
             else if (screen == Screen.PAUSED) resumeGame();
+            repaint();
         });
         bindAction("R", "restart", () -> {
             if (screen == Screen.PAUSED || screen == Screen.GAME_OVER || screen == Screen.VICTORY) {
-                startGame();
+                startGame(selectedLevel);
             }
         });
     }
@@ -96,7 +125,11 @@ public class GamePanel extends JPanel {
             @Override
             public void actionPerformed(ActionEvent event) {
                 if (down) {
-                    if (control.equals("interact") || control.equals("steal")) {
+                    if (screen == Screen.LEVEL_SELECT && isDirectional(control)) {
+                        moveLevelSelection(levelSelectionDelta(control));
+                        return;
+                    }
+                    if (control.equals("interact") || control.equals("steal") || control.equals("distract")) {
                         if (!pressedKeys.contains(control)) {
                             worldInputEdge(control);
                         }
@@ -109,10 +142,23 @@ public class GamePanel extends JPanel {
         });
     }
 
+    private static boolean isDirectional(String control) {
+        return control.equals("up") || control.equals("down")
+            || control.equals("left") || control.equals("right");
+    }
+
+    private static int levelSelectionDelta(String control) {
+        if (control.equals("left")) return -1;
+        if (control.equals("right")) return 1;
+        if (control.equals("up")) return -2;
+        return 2;
+    }
+
     private void worldInputEdge(String control) {
-        if (world == null) return;
+        if (screen != Screen.PLAYING || world == null) return;
         if (control.equals("interact")) world.setInteractPressed(true);
         if (control.equals("steal")) world.setStealPressed(true);
+        if (control.equals("distract")) world.setDistractPressed(true);
     }
 
     private void bindAction(String key, String id, Runnable action) {
@@ -126,9 +172,15 @@ public class GamePanel extends JPanel {
     }
 
     private void startGame() {
+        startGame(selectedLevel);
+    }
+
+    private void startGame(int levelIndex) {
         gameLoop.stop();
         pressedKeys.clear();
-        world = new GameWorld();
+        selectedLevel = levelIndex;
+        lastResult = null;
+        world = new GameWorld(levelIndex);
         screen = Screen.PLAYING;
         gameLoop.start();
         requestFocusInWindow();
@@ -156,25 +208,75 @@ public class GamePanel extends JPanel {
 
     private void handleEscape() {
         if (screen == Screen.PLAYING) togglePause();
-        else if (screen == Screen.PAUSED || screen == Screen.VICTORY || screen == Screen.GAME_OVER) {
+        else if (screen == Screen.LEVEL_SELECT) {
+            screen = Screen.MENU;
+            repaint();
+        } else if (screen == Screen.PAUSED || screen == Screen.VICTORY || screen == Screen.GAME_OVER) {
             gameLoop.stop();
             pressedKeys.clear();
-            screen = Screen.MENU;
+            screen = Screen.LEVEL_SELECT;
             repaint();
         }
     }
 
     private void handleClick(int x, int y) {
         if (screen == Screen.MENU) {
-            if (buttonBounds(390, 350).contains(x, y)) startGame();
+            if (buttonBounds(390, 350).contains(x, y)) {
+                screen = Screen.LEVEL_SELECT;
+                repaint();
+            }
+        } else if (screen == Screen.LEVEL_SELECT) {
+            int clicked = levelAt(x, y);
+            if (clicked >= 0) {
+                selectedLevel = clicked;
+                if (levelManager.isUnlocked(clicked)) startSelectedLevel();
+                else repaint();
+            } else if (buttonBounds(390, 510).contains(x, y)) {
+                screen = Screen.MENU;
+                repaint();
+            }
         } else if (screen == Screen.PAUSED) {
             if (buttonBounds(390, 330).contains(x, y)) resumeGame();
             else if (buttonBounds(390, 390).contains(x, y)) startGame();
             else if (buttonBounds(390, 450).contains(x, y)) handleEscape();
-        } else if (screen == Screen.VICTORY || screen == Screen.GAME_OVER) {
-            if (buttonBounds(390, 390).contains(x, y)) startGame();
+        } else if (screen == Screen.VICTORY) {
+            if (buttonBounds(390, 350).contains(x, y)) {
+                if (levelManager.isUnlocked(selectedLevel + 1)) startGame(selectedLevel + 1);
+                else startGame(selectedLevel);
+            } else if (buttonBounds(390, 410).contains(x, y)) startGame(selectedLevel);
+            else if (buttonBounds(390, 470).contains(x, y)) {
+                screen = Screen.LEVEL_SELECT;
+                repaint();
+            }
+        } else if (screen == Screen.GAME_OVER) {
+            if (buttonBounds(390, 390).contains(x, y)) startGame(selectedLevel);
             else if (buttonBounds(390, 450).contains(x, y)) handleEscape();
         }
+    }
+
+    private int levelAt(int x, int y) {
+        for (int i = 0; i < MuseumLevel.all().size(); i++) {
+            java.awt.Rectangle bounds = levelCardBounds(i);
+            if (bounds.contains(x, y)) return i;
+        }
+        return -1;
+    }
+
+    private static java.awt.Rectangle levelCardBounds(int index) {
+        int column = index % 2;
+        int row = index / 2;
+        return new java.awt.Rectangle(115 + column * 375, 145 + row * 112, 350, 96);
+    }
+
+    private void moveLevelSelection(int amount) {
+        if (screen != Screen.LEVEL_SELECT) return;
+        int candidate = Math.max(0, Math.min(MuseumLevel.all().size() - 1, selectedLevel + amount));
+        if (levelManager.isUnlocked(candidate)) selectedLevel = candidate;
+        repaint();
+    }
+
+    private void startSelectedLevel() {
+        if (levelManager.isUnlocked(selectedLevel)) startGame(selectedLevel);
     }
 
     private static java.awt.Rectangle buttonBounds(int x, int y) {
@@ -190,11 +292,16 @@ public class GamePanel extends JPanel {
             pressedKeys.contains("left"),
             pressedKeys.contains("right"),
             pressedKeys.contains("sprint"),
+            pressedKeys.contains("sneak"),
             pressedKeys.contains("interact"),
-            pressedKeys.contains("steal")
+            pressedKeys.contains("steal"),
+            false,
+            false,
+            false
         );
         world.update(1.0 / 60.0, input);
         if (world.isWon()) {
+            lastResult = levelManager.recordCompletion(world);
             screen = Screen.VICTORY;
             gameLoop.stop();
             pressedKeys.clear();
@@ -213,10 +320,11 @@ public class GamePanel extends JPanel {
         g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_OFF);
         g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_NEAREST_NEIGHBOR);
         if (screen == Screen.MENU) drawMenu(g);
+        else if (screen == Screen.LEVEL_SELECT) drawLevelSelect(g);
         else {
             if (world != null) drawGame(g, world);
             if (screen == Screen.PAUSED) drawOverlay(g, "HEIST PAUSED", "The guards are still on their rounds.", "CONTINUE", "RESTART HEIST", "MAIN MENU");
-            else if (screen == Screen.VICTORY) drawOverlay(g, "HEIST COMPLETE", "Every original is safe. You made it out.", "PLAY AGAIN", "", "MAIN MENU");
+            else if (screen == Screen.VICTORY) drawVictory(g);
             else if (screen == Screen.GAME_OVER) drawOverlay(g, "HEIST BUSTED", world == null ? "" : world.getEndReason(), "TRY AGAIN", "", "MAIN MENU");
         }
         g.dispose();
@@ -224,12 +332,15 @@ public class GamePanel extends JPanel {
 
     private void drawGame(Graphics2D g, GameWorld game) {
         MuseumMap map = game.getMap();
-        map.draw(g);
+        map.draw(g, game.getPlayerCenterX(), game.getPlayerCenterY());
         drawGuardVision(g, game.getGuards());
+        drawCameraVision(g, game.getCameras());
+        drawNoiseIndicators(g, game.getNoiseSystem().getEvents());
         for (MuseumMap.Painting painting : map.getPaintings()) drawPainting(g, painting);
         for (MuseumMap.HideSpot spot : map.getHideSpots()) drawHideSpot(g, spot, game.isNear(spot));
         for (Guard guard : game.getGuards()) drawGuard(g, guard);
         drawPlayer(g, game);
+        drawDistractionEffect(g, game);
         drawLighting(g, game.getPlayerCenterX(), game.getPlayerCenterY());
         drawHud(g, game);
         drawPrompt(g, game);
@@ -244,10 +355,9 @@ public class GamePanel extends JPanel {
             cone.moveTo(guard.centerX(), guard.centerY());
             for (int step = 0; step <= 24; step++) {
                 double a = angle - Math.toRadians(58) + Math.toRadians(116) * step / 24.0;
-                double x = guard.centerX() + Math.cos(a) * radius;
-                double y = guard.centerY() + Math.sin(a) * radius;
-                if (step == 0) cone.lineTo(x, y);
-                else cone.lineTo(x, y);
+                java.awt.geom.Point2D.Double endpoint = world.getMap().getVisionEndpoint(
+                    guard.centerX(), guard.centerY(), a, radius);
+                cone.lineTo(endpoint.x, endpoint.y);
             }
             cone.closePath();
             Color tint = guard.getState() == Guard.State.CHASE
@@ -257,6 +367,63 @@ public class GamePanel extends JPanel {
             g.fill(cone);
             g.setColor(new Color(tint.getRed(), tint.getGreen(), tint.getBlue(), 95));
             g.draw(cone);
+        }
+    }
+
+    private void drawCameraVision(Graphics2D g, java.util.List<SecurityCamera> cameras) {
+        for (SecurityCamera camera : cameras) {
+            double angle = camera.getFacingAngle();
+            double radius = camera.getRadius();
+            Path2D.Double cone = new Path2D.Double();
+            cone.moveTo(camera.getX(), camera.getY());
+            for (int step = 0; step <= 24; step++) {
+                double a = angle - Math.toRadians(34) + Math.toRadians(68) * step / 24.0;
+                java.awt.geom.Point2D.Double endpoint = world.getMap().getVisionEndpoint(
+                    camera.getX(), camera.getY(), a, radius);
+                cone.lineTo(endpoint.x, endpoint.y);
+            }
+            cone.closePath();
+            boolean disabled = world.getMap().areSecuritySystemsDisabled();
+            Color tint = disabled ? new Color(90, 206, 132, 22)
+                : camera.isDetecting() ? new Color(222, 44, 49, 64)
+                : camera.isTracking() ? new Color(238, 181, 79, 45) : new Color(75, 181, 222, 25);
+            g.setColor(tint);
+            g.fill(cone);
+            g.setColor(new Color(tint.getRed(), tint.getGreen(), tint.getBlue(), 110));
+            g.draw(cone);
+            int x = (int) camera.getX();
+            int y = (int) camera.getY();
+            g.setColor(new Color(29, 33, 42));
+            g.fillRect(x - 7, y - 5, 14, 10);
+            g.setColor(camera.isDetecting() ? new Color(250, 69, 64)
+                : camera.isTracking() ? new Color(255, 201, 88)
+                : disabled ? new Color(108, 204, 129) : new Color(120, 209, 229));
+            g.fillOval(x - 3, y - 3, 6, 6);
+            if (camera.isTracking()) {
+                g.setColor(new Color(32, 34, 39));
+                g.fillRect(x - 13, y + 8, 26, 4);
+                g.setColor(camera.isDetecting() ? new Color(244, 78, 70) : new Color(247, 198, 93));
+                g.fillRect(x - 12, y + 9, (int) (24 * camera.getDetectionProgress()), 2);
+            }
+        }
+    }
+
+    private void drawNoiseIndicators(Graphics2D g, java.util.List<NoiseSystem.NoiseEvent> events) {
+        for (NoiseSystem.NoiseEvent event : events) {
+            double progress = 1.0 - event.getProgress();
+            int radius = 9 + (int) (Math.min(90, event.getRadius() * 0.24) * progress);
+            int x = (int) Math.round(event.getX());
+            int y = (int) Math.round(event.getY());
+            boolean alarm = event.getSource().contains("alarm");
+            Color color = alarm ? new Color(255, 88, 75) : new Color(246, 212, 139);
+            int alpha = Math.max(12, 125 - (int) (progress * 90));
+            g.setColor(new Color(color.getRed(), color.getGreen(), color.getBlue(), alpha));
+            g.drawOval(x - radius, y - radius, radius * 2, radius * 2);
+            if (progress < 0.45) {
+                g.fillOval(x - 3, y - 3, 6, 6);
+                g.setFont(new Font("Monospaced", Font.BOLD, 8));
+                g.drawString(event.getSource().toUpperCase(), x + 7, y - 6);
+            }
         }
     }
 
@@ -273,8 +440,6 @@ public class GamePanel extends JPanel {
         g.fillRect(x - 2, y - 2, w + 4, h + 4);
         g.setColor(new Color(251, 218, 144));
         g.fillRect(x - 2, y - 2, w + 4, 3);
-        if (painting.isStolen()) {
-        }
         Color[] skies = {
             new Color(45, 93, 124), new Color(60, 106, 86), new Color(91, 67, 117)
         };
@@ -305,6 +470,20 @@ public class GamePanel extends JPanel {
             g.setFont(new Font("Monospaced", Font.BOLD, 7));
             g.drawString("!", x + w - 8, y + 9);
         }
+    }
+
+    private void drawDistractionEffect(Graphics2D g, GameWorld game) {
+        if (!game.hasDistractionEffect()) return;
+        double progress = 1.0 - game.getDistractionEffectProgress();
+        int radius = 14 + (int) (progress * 52);
+        int x = (int) Math.round(game.getDistractionX());
+        int y = (int) Math.round(game.getDistractionY());
+        int alpha = Math.max(0, 180 - (int) (progress * 150));
+        g.setColor(new Color(246, 213, 143, alpha));
+        g.drawOval(x - radius, y - radius, radius * 2, radius * 2);
+        g.drawOval(x - radius / 2, y - radius / 2, radius, radius);
+        g.setColor(new Color(255, 237, 191, Math.max(0, alpha - 30)));
+        g.fillRect(x - 3, y - 3, 6, 6);
     }
 
     private void drawHideSpot(Graphics2D g, MuseumMap.HideSpot spot, boolean near) {
@@ -357,36 +536,88 @@ public class GamePanel extends JPanel {
     }
 
     private void drawPlayer(Graphics2D g, GameWorld game) {
-        int x = (int) Math.round(game.getPlayerX());
-        int y = (int) Math.round(game.getPlayerY());
-        boolean walking = game.isMoving();
-        int step = walking && animationFrame / 8 % 2 == 0 ? 2 : 0;
+        int x = (int) Math.round(game.getPlayerCenterX() - SPRITE_WIDTH / 2.0);
+        int y = (int) Math.round(game.getPlayerBottomY() - SPRITE_HEIGHT);
         if (game.isHidden()) {
             g.setColor(new Color(10, 12, 16, 120));
-            g.fillOval(x - 7, y - 5, 34, 34);
+            g.fillOval(x + 5, y + SPRITE_HEIGHT - 9, SPRITE_WIDTH - 10, 10);
             return;
         }
         g.setColor(new Color(0, 0, 0, 110));
-        g.fillOval(x + 1, y + 18, 23, 8);
-        g.setColor(new Color(39, 31, 41));
-        g.fillRect(x + 4, y + 18 + step, 6, 5);
-        g.fillRect(x + 15, y + 18 - step, 6, 5);
-        g.setColor(new Color(39, 45, 69));
-        g.fillRect(x + 3, y + 9, 18, 12);
-        g.setColor(new Color(68, 87, 127));
-        g.fillRect(x + 6, y + 10, 12, 7);
-        g.setColor(new Color(222, 172, 82));
-        g.fillRect(x + 10, y + 10, 5, 8);
-        g.setColor(new Color(210, 151, 106));
-        g.fillRect(x + 6, y + 2, 13, 9);
-        g.setColor(new Color(36, 30, 42));
-        g.fillRect(x + 5, y, 15, 4);
-        g.fillRect(x + 6, y + 7, 14, 3);
-        g.setColor(new Color(255, 225, 168));
-        g.fillRect(x + 9, y + 7, 2, 2);
-        g.fillRect(x + 16, y + 7, 2, 2);
-        g.setColor(new Color(139, 82, 45));
-        g.fillRect(x + 17, y + 13, 5, 6);
+        g.fillOval(x + 8, y + SPRITE_HEIGHT - 8, SPRITE_WIDTH - 16, 7);
+        g.drawImage(getPlayerSpriteFrame(game), x, y, SPRITE_WIDTH, SPRITE_HEIGHT, null);
+    }
+
+    private BufferedImage getPlayerSpriteFrame(GameWorld game) {
+        int action;
+        int ticksPerFrame;
+        if (game.isSprinting()) {
+            action = RUN_ACTION;
+            ticksPerFrame = 4;
+        } else if (game.isSneaking()) {
+            action = SNEAK_ACTION;
+            ticksPerFrame = 8;
+        } else if (game.isMoving()) {
+            action = WALK_ACTION;
+            ticksPerFrame = 6;
+        } else {
+            action = IDLE_ACTION;
+            ticksPerFrame = 12;
+        }
+
+        int directionRow = getPlayerDirectionRow(game.getPlayerFacingX(), game.getPlayerFacingY());
+        int frame = (int) (animationFrame / ticksPerFrame % SPRITE_COLUMNS);
+        return playerSpriteFrames[ACTION_ROW_START[action] + directionRow][frame];
+    }
+
+    private static int getPlayerDirectionRow(double facingX, double facingY) {
+        if (Math.abs(facingX) > Math.abs(facingY)) return facingX < 0 ? 2 : 3;
+        return facingY < 0 ? 1 : 0;
+    }
+
+    private static BufferedImage[][] loadPlayerSpriteFrames() {
+        try {
+            BufferedImage sheet = readPlayerSpriteSheet();
+            int expectedWidth = SPRITE_FRAME_WIDTH * SPRITE_COLUMNS;
+            int expectedHeight = SPRITE_FRAME_HEIGHT * SPRITE_ROWS;
+            if (sheet.getWidth() != expectedWidth || sheet.getHeight() != expectedHeight) {
+                throw new IOException("Unexpected thief atlas dimensions: " + sheet.getWidth() + "x"
+                    + sheet.getHeight() + " (expected " + expectedWidth + "x" + expectedHeight + ").");
+            }
+
+            BufferedImage[][] frames = new BufferedImage[SPRITE_ROWS][SPRITE_COLUMNS];
+            for (int row = 0; row < SPRITE_ROWS; row++) {
+                for (int column = 0; column < SPRITE_COLUMNS; column++) {
+                    frames[row][column] = sheet.getSubimage(
+                        column * SPRITE_FRAME_WIDTH, row * SPRITE_FRAME_HEIGHT,
+                        SPRITE_FRAME_WIDTH, SPRITE_FRAME_HEIGHT);
+                }
+            }
+            return frames;
+        } catch (IOException exception) {
+            throw new IllegalStateException("Could not load the thief sprite atlas. Run PaintHeist from "
+                + "the project root so assets/sprites/thief/thief-spritesheet.png is available.", exception);
+        }
+    }
+
+    private static BufferedImage readPlayerSpriteSheet() throws IOException {
+        String resourcePath = "/assets/sprites/thief/thief-spritesheet.png";
+        InputStream resource = GamePanel.class.getResourceAsStream(resourcePath);
+        if (resource != null) {
+            try (InputStream input = resource) {
+                BufferedImage image = ImageIO.read(input);
+                if (image == null) throw new IOException("Unsupported thief sprite atlas image.");
+                return image;
+            }
+        }
+
+        File atlas = new File("assets/sprites/thief/thief-spritesheet.png");
+        if (!atlas.isFile()) {
+            throw new IOException("Sprite atlas not found: " + atlas.getAbsolutePath());
+        }
+        BufferedImage image = ImageIO.read(atlas);
+        if (image == null) throw new IOException("Unsupported thief sprite atlas image: " + atlas.getAbsolutePath());
+        return image;
     }
 
     private void drawLighting(Graphics2D g, double x, double y) {
@@ -420,7 +651,7 @@ public class GamePanel extends JPanel {
         g.drawString("OBJECTIVE", 165, 19);
         g.setFont(new Font("Monospaced", Font.BOLD, 12));
         g.setColor(Color.WHITE);
-        String objective = game.getStolenCount() == MuseumMap.Painting.COUNT
+        String objective = game.getStolenCount() == game.getTargetCount()
             ? "Reach the marked exit" : "Copy, then steal every marked painting";
         g.drawString(objective, 165, 38);
         g.setFont(new Font("Monospaced", Font.BOLD, 12));
@@ -436,16 +667,19 @@ public class GamePanel extends JPanel {
         g.setColor(new Color(225, 218, 221));
         g.drawRect(514, 19, 119, 13);
         g.setFont(new Font("Monospaced", Font.BOLD, 10));
-        g.drawString("SUSPICION " + game.getSuspicion() + "%", 515, 47);
+        g.drawString("ALERT / SUSPICION " + game.getSuspicion() + "%", 515, 47);
         g.setColor(new Color(225, 219, 229));
-        g.drawString("ART " + game.getStolenCount() + "/" + MuseumMap.Painting.COUNT, 674, 27);
+        g.drawString("ART " + game.getStolenCount() + "/" + game.getTargetCount(), 674, 27);
         String alert = game.getAlertStatus();
         g.setColor(alert.equals("CALM") ? new Color(133, 216, 157)
             : alert.equals("CHASE") ? new Color(255, 93, 84) : GOLD);
         g.drawString("SECURITY: " + alert, 674, 47);
+        g.setColor(game.getNoiseSystem().getEvents().isEmpty()
+            ? new Color(133, 216, 157) : new Color(255, 204, 109));
+        g.drawString("SOUNDS " + game.getNoiseSystem().getEvents().size(), 835, 27);
         g.setFont(new Font("Monospaced", Font.PLAIN, 9));
         g.setColor(new Color(157, 153, 164));
-        g.drawString("WASD MOVE  SHIFT SPRINT  E INTERACT  F STEAL  P PAUSE", 18, 54);
+        g.drawString("WASD MOVE  SHIFT SPRINT  E INTERACT  F SWAP  Q DISTRACT  P PAUSE", 18, 54);
     }
 
     private void drawPrompt(Graphics2D g, GameWorld game) {
@@ -478,13 +712,94 @@ public class GamePanel extends JPanel {
         g.setColor(new Color(215, 207, 215));
         drawCentered(g, "THE QUIETEST HEIST LEAVES THE BEST STORY", WIDTH / 2, 190);
         drawMuseumEmblem(g);
-        drawButton(g, "BEGIN THE HEIST", 390, 350, true);
+        drawButton(g, "SELECT MUSEUM", 390, 350, true);
         g.setFont(new Font("Monospaced", Font.PLAIN, 11));
         g.setColor(new Color(171, 166, 177));
-        drawCentered(g, "WASD / ARROWS MOVE   SHIFT SPRINT   E COPY / HIDE   F SWAP ART", WIDTH / 2, 442);
+        drawCentered(g, "Choose a museum and plan your route.", WIDTH / 2, 442);
         drawCentered(g, "Copy every masterpiece, leave a convincing fake, and reach the exit.", WIDTH / 2, 465);
         g.setColor(new Color(120, 113, 127));
-        drawCentered(g, "404 TULOG PRODUCTIONS", WIDTH / 2, 547);
+        drawCentered(g, "404Tulog Productions", WIDTH / 2, 547);
+    }
+
+    private void drawLevelSelect(Graphics2D g) {
+        drawBackdrop(g);
+        g.setFont(new Font("Monospaced", Font.BOLD, 28));
+        g.setColor(new Color(255, 219, 142));
+        drawCentered(g, "SELECT YOUR MUSEUM", WIDTH / 2, 96);
+        g.setFont(new Font("Monospaced", Font.PLAIN, 11));
+        g.setColor(new Color(190, 183, 197));
+        drawCentered(g, "Complete each heist to unlock the next exhibition.", WIDTH / 2, 120);
+        for (int i = 0; i < MuseumLevel.all().size(); i++) {
+            MuseumLevel level = MuseumLevel.get(i);
+            java.awt.Rectangle card = levelCardBounds(i);
+            boolean unlocked = levelManager.isUnlocked(i);
+            boolean selected = i == selectedLevel;
+            g.setColor(selected ? new Color(65, 53, 49) : new Color(35, 34, 41));
+            g.fillRect(card.x, card.y, card.width, card.height);
+            g.setColor(selected ? GOLD : unlocked ? new Color(127, 105, 78) : new Color(64, 59, 66));
+            g.drawRect(card.x, card.y, card.width, card.height);
+            g.setFont(new Font("Monospaced", Font.BOLD, 14));
+            g.setColor(unlocked ? new Color(255, 226, 167) : new Color(134, 129, 141));
+            g.drawString((i + 1) + ". " + level.getName(), card.x + 14, card.y + 23);
+            g.setFont(new Font("Monospaced", Font.BOLD, 10));
+            g.setColor(unlocked ? new Color(236, 196, 124) : new Color(121, 116, 128));
+            g.drawString(unlocked ? level.getDifficulty() : "LOCKED", card.x + 15, card.y + 43);
+            g.setFont(new Font("Monospaced", Font.PLAIN, 10));
+            g.setColor(new Color(205, 198, 208));
+            g.drawString(level.getPaintingCount() + " TARGETS   " + level.getGuards().size() + " GUARDS",
+                card.x + 120, card.y + 43);
+            g.setColor(new Color(158, 152, 165));
+            String challenge = level.getChallenge();
+            if (challenge.length() > 49) challenge = challenge.substring(0, 46) + "...";
+            g.drawString(challenge, card.x + 15, card.y + 68);
+            int bestScore = levelManager.getBestScore(i);
+            int bestTime = levelManager.getBestTime(i);
+            String best = bestScore == 0 ? "BEST --"
+                : "BEST " + bestScore + "   " + bestTime / 60 + ":" + String.format("%02d", bestTime % 60);
+            g.setColor(new Color(227, 211, 170));
+            g.drawString(best, card.x + 15, card.y + 86);
+        }
+        drawButton(g, "BACK", 390, 510, false);
+        g.setFont(new Font("Monospaced", Font.PLAIN, 10));
+        g.setColor(new Color(165, 158, 172));
+        drawCentered(g, "ARROWS / WASD SELECT   ENTER TO PLAY   ESC TO BACK", WIDTH / 2, 575);
+    }
+
+    private void drawVictory(Graphics2D g) {
+        g.setColor(new Color(7, 9, 14, 215));
+        g.fillRect(0, 0, WIDTH, HEIGHT);
+        g.setColor(new Color(35, 31, 40));
+        g.fillRect(245, 100, 470, 440);
+        g.setColor(GOLD);
+        g.fillRect(245, 100, 470, 5);
+        g.drawRect(245, 100, 470, 440);
+        g.setFont(new Font("Monospaced", Font.BOLD, 27));
+        g.setColor(new Color(137, 226, 161));
+        drawCentered(g, "HEIST COMPLETE", WIDTH / 2, 153);
+        g.setFont(new Font("Monospaced", Font.BOLD, 15));
+        g.setColor(new Color(255, 220, 144));
+        drawCentered(g, world.getLevel().getName(), WIDTH / 2, 184);
+        int stars = lastResult == null ? 0 : lastResult.getStars();
+        g.setFont(new Font("Monospaced", Font.BOLD, 28));
+        g.setColor(GOLD);
+        drawCentered(g, starString(stars), WIDTH / 2, 229);
+        g.setFont(new Font("Monospaced", Font.PLAIN, 12));
+        g.setColor(new Color(232, 223, 231));
+        drawCentered(g, "SCORE  " + (lastResult == null ? 0 : lastResult.getScore()), WIDTH / 2, 263);
+        drawCentered(g, "REWARD  +" + (lastResult == null ? 0 : lastResult.getReward()) + " HEIST CREDITS",
+            WIDTH / 2, 285);
+        drawCentered(g, "TIME LEFT  " + (lastResult == null ? 0 : lastResult.getTimeRemaining()) + "s"
+            + "     ALERTS  " + (lastResult == null ? 0 : lastResult.getDetectionIncidents()), WIDTH / 2, 307);
+        String nextLabel = levelManager.isUnlocked(selectedLevel + 1) ? "NEXT MUSEUM" : "REPLAY HEIST";
+        drawButton(g, nextLabel, 390, 335, true);
+        drawButton(g, "REPLAY HEIST", 390, 395, false);
+        drawButton(g, "LEVEL SELECT", 390, 455, false);
+    }
+
+    private static String starString(int stars) {
+        StringBuilder text = new StringBuilder();
+        for (int i = 0; i < 3; i++) text.append(i < stars ? "* " : "- ");
+        return text.toString().trim();
     }
 
     private void drawBackdrop(Graphics2D g) {

@@ -23,6 +23,10 @@ public final class Guard {
     private double searchOffset;
     private double goalX;
     private double goalY;
+    private double pathEndX;
+    private double pathEndY;
+    private boolean pathCalculated;
+    private boolean pathReachable;
     private List<Point> path = new ArrayList<>();
     private boolean playerVisible;
 
@@ -87,7 +91,7 @@ public final class Guard {
             case INSPECT:
                 moveTo(dt, map, goalX, goalY, patrolSpeed + 4);
                 stateTimer += dt;
-                if (stateTimer >= 5 || atGoal(goalX, goalY)) {
+                if (stateTimer >= 5 || hasReachedGoal(goalX, goalY)) {
                     state = State.RETURN;
                     stateTimer = 0;
                 }
@@ -114,7 +118,7 @@ public final class Guard {
             case RETURN:
                 Point waypoint = patrolRoute.get(patrolIndex);
                 moveTo(dt, map, waypoint.x, waypoint.y, patrolSpeed + 4);
-                if (atGoal(waypoint.x, waypoint.y)) {
+                if (hasReachedGoal(waypoint.x, waypoint.y)) {
                     state = State.PATROL;
                     stateTimer = 0;
                 }
@@ -135,7 +139,7 @@ public final class Guard {
         if (patrolRoute.isEmpty()) return;
         Point waypoint = patrolRoute.get(patrolIndex);
         moveTo(dt, map, waypoint.x, waypoint.y, patrolSpeed);
-        if (atGoal(waypoint.x, waypoint.y)) {
+        if (hasReachedGoal(waypoint.x, waypoint.y)) {
             patrolIndex = (patrolIndex + 1) % patrolRoute.size();
             setGoal(patrolRoute.get(patrolIndex).x, patrolRoute.get(patrolIndex).y);
         }
@@ -146,6 +150,13 @@ public final class Guard {
         if (path.isEmpty() || replanTimer <= 0) {
             path = map.findPath(x, y, targetX, targetY, WIDTH, HEIGHT);
             replanTimer = 0.75;
+            pathCalculated = true;
+            pathReachable = !path.isEmpty();
+            if (pathReachable) {
+                Point endpoint = path.get(path.size() - 1);
+                pathEndX = endpoint.x;
+                pathEndY = endpoint.y;
+            }
             if (!path.isEmpty() && Point.distance(x, y, path.get(0).x, path.get(0).y) < 8) path.remove(0);
         }
         while (!path.isEmpty() && Point.distance(x, y, path.get(0).x, path.get(0).y) < 5) path.remove(0);
@@ -186,10 +197,18 @@ public final class Guard {
         return Point.distance(x, y, targetX, targetY) <= 14;
     }
 
+    private boolean hasReachedGoal(double targetX, double targetY) {
+        return atGoal(targetX, targetY)
+            || (pathCalculated && pathReachable && path.isEmpty()
+                && Point.distance(x, y, pathEndX, pathEndY) <= 8);
+    }
+
     private void setGoal(double x, double y) {
         goalX = x;
         goalY = y;
         path.clear();
+        pathCalculated = false;
+        pathReachable = false;
         replanTimer = 0;
     }
 

@@ -3,6 +3,7 @@ import java.awt.Graphics2D;
 import java.awt.Point;
 import java.awt.Rectangle;
 import java.awt.geom.Line2D;
+import java.awt.geom.Point2D;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
@@ -17,52 +18,55 @@ public final class MuseumMap {
     public static final int WIDTH = 960;
     public static final int HEIGHT = 600;
     private static final int TILE = 20;
+    private final MuseumLevel level;
     private final List<Rectangle> solids = new ArrayList<>();
     private final List<Painting> paintings = new ArrayList<>();
     private final List<HideSpot> hideSpots = new ArrayList<>();
     private final List<Rectangle> cases = new ArrayList<>();
     private final List<Rectangle> benches = new ArrayList<>();
-    private final Rectangle exit = new Rectangle(42, 474, 38, 58);
+    private final List<Rectangle> statues = new ArrayList<>();
+    private final List<Rectangle> lasers = new ArrayList<>();
+    private final List<Rectangle> switches = new ArrayList<>();
+    private final List<Rectangle> exits = new ArrayList<>();
+    private final List<LaserBarrier> laserBarriers = new ArrayList<>();
+    private final List<MovableObject> movableObjects = new ArrayList<>();
+    private final List<SecretPassage> secretPassages = new ArrayList<>();
+    private double securityDisabledSeconds;
 
     public MuseumMap() {
+        this(MuseumLevel.get(0));
+    }
+
+    public MuseumMap(MuseumLevel level) {
+        this.level = level;
         addWall(0, 65, WIDTH, 25);
         addWall(0, 90, 24, 450);
         addWall(936, 90, 24, 450);
         addWall(0, 540, WIDTH, 60);
+        for (Rectangle wall : level.getWalls()) addWall(wall.x, wall.y, wall.width, wall.height);
+        copyInto(level.getCases(), cases);
+        copyInto(level.getBenches(), benches);
+        copyInto(level.getStatues(), statues);
+        copyInto(level.getLasers(), lasers);
+        copyInto(level.getSwitches(), switches);
+        for (LaserBarrier.Data data : level.getLaserPatterns()) laserBarriers.add(data.createBarrier());
+        for (MovableObject.Data data : level.getMovableObjects()) movableObjects.add(data.createObject());
+        for (SecretPassage.Data data : level.getSecretPassages()) secretPassages.add(data.createPassage());
+        copyInto(cases, solids);
+        copyInto(benches, solids);
+        copyInto(statues, solids);
+        for (Point exit : level.getExits()) exits.add(new Rectangle(exit.x, exit.y, 38, 58));
+        for (int i = 0; i < level.getPaintingCount(); i++) {
+            Point position = level.getPaintingPositions().get(i);
+            paintings.add(new Painting(i, position.x, position.y, level.getPaintingNames().get(i)));
+        }
+        for (MuseumLevel.HideSpotData spot : level.getHideSpots()) {
+            hideSpots.add(new HideSpot(spot.getName(), spot.getBounds()));
+        }
+    }
 
-        addWall(24, 248, 138, 18);
-        addWall(207, 248, 235, 18);
-        addWall(505, 248, 230, 18);
-        addWall(785, 248, 151, 18);
-
-        addWall(310, 90, 18, 72);
-        addWall(310, 207, 18, 41);
-        addWall(310, 266, 18, 111);
-        addWall(310, 425, 18, 115);
-        addWall(632, 90, 18, 72);
-        addWall(632, 207, 18, 41);
-        addWall(632, 266, 18, 111);
-        addWall(632, 425, 18, 115);
-
-        cases.add(new Rectangle(93, 173, 100, 39));
-        cases.add(new Rectangle(386, 168, 111, 40));
-        cases.add(new Rectangle(725, 171, 112, 40));
-        cases.add(new Rectangle(125, 346, 112, 40));
-        cases.add(new Rectangle(421, 347, 110, 40));
-        cases.add(new Rectangle(718, 346, 111, 40));
-        benches.add(new Rectangle(44, 294, 52, 23));
-        benches.add(new Rectangle(852, 287, 48, 22));
-        benches.add(new Rectangle(526, 455, 56, 22));
-        solids.addAll(cases);
-        solids.addAll(benches);
-
-        paintings.add(new Painting(0, 112, 112, "Moonlit Orchard"));
-        paintings.add(new Painting(1, 451, 112, "The Green Hour"));
-        paintings.add(new Painting(2, 779, 112, "Velvet Coast"));
-
-        hideSpots.add(new HideSpot("Gallery wardrobe", new Rectangle(250, 316, 44, 52)));
-        hideSpots.add(new HideSpot("Restoration cabinet", new Rectangle(662, 432, 46, 52)));
-        hideSpots.add(new HideSpot("Security locker", new Rectangle(852, 451, 48, 54)));
+    private static void copyInto(List<Rectangle> source, List<Rectangle> destination) {
+        for (Rectangle rectangle : source) destination.add(new Rectangle(rectangle));
     }
 
     private void addWall(int x, int y, int width, int height) {
@@ -72,11 +76,161 @@ public final class MuseumMap {
     public List<Painting> getPaintings() { return Collections.unmodifiableList(paintings); }
     public List<HideSpot> getHideSpots() { return Collections.unmodifiableList(hideSpots); }
     public List<Rectangle> getSolids() { return Collections.unmodifiableList(solids); }
-    public Rectangle getExit() { return new Rectangle(exit); }
+    public List<Rectangle> getExits() { return Collections.unmodifiableList(exits); }
+    public Rectangle getExit() { return new Rectangle(exits.get(0)); }
+    public MuseumLevel getLevel() { return level; }
+    public int getPaintingCount() { return paintings.size(); }
+    public List<Rectangle> getLasers() { return Collections.unmodifiableList(lasers); }
+    public List<LaserBarrier> getLaserBarriers() { return Collections.unmodifiableList(laserBarriers); }
+    public List<MovableObject> getMovableObjects() { return Collections.unmodifiableList(movableObjects); }
+    public List<SecretPassage> getSecretPassages() { return Collections.unmodifiableList(secretPassages); }
+    public List<Rectangle> getSwitches() { return Collections.unmodifiableList(switches); }
+    public boolean areSecuritySystemsDisabled() { return securityDisabledSeconds > 0; }
+    public boolean hasSecuritySwitches() { return !switches.isEmpty(); }
+    public double getSecurityDisabledSeconds() { return securityDisabledSeconds; }
+    public boolean isNearSwitch(double x, double y) {
+        for (Rectangle securitySwitch : switches) {
+            if (Point.distance(x, y, securitySwitch.getCenterX(), securitySwitch.getCenterY()) <= 48) return true;
+        }
+        return false;
+    }
+
+    public void updateSecurity(double dt) {
+        securityDisabledSeconds = Math.max(0, securityDisabledSeconds - dt);
+        for (LaserBarrier barrier : laserBarriers) {
+            barrier.update(dt, securityDisabledSeconds > 0);
+        }
+        for (SecretPassage passage : secretPassages) passage.update(dt);
+    }
+
+    public boolean activateNearbySwitch(double x, double y) {
+        for (Rectangle securitySwitch : switches) {
+            if (Point.distance(x, y, securitySwitch.getCenterX(), securitySwitch.getCenterY()) <= 48) {
+                securityDisabledSeconds = 12;
+                for (LaserBarrier barrier : laserBarriers) barrier.update(0, true);
+                return true;
+            }
+        }
+        return false;
+    }
 
     public boolean isBlocked(Rectangle actor) {
         for (Rectangle solid : solids) if (actor.intersects(solid)) return true;
+        for (MovableObject object : movableObjects) if (actor.intersects(object.getBounds())) return true;
+        for (SecretPassage passage : secretPassages) {
+            if (!passage.isDiscovered()
+                && (actor.intersects(passage.getFirstEntrance())
+                    || actor.intersects(passage.getSecondEntrance()))) return true;
+        }
+        if (getActiveLaserContact(actor) != null) return true;
         return false;
+    }
+
+    public LaserBarrier getActiveLaserContact(Rectangle actor) {
+        for (LaserBarrier barrier : laserBarriers) {
+            if (barrier.isActive() && actor.intersects(barrier.getBounds())) return barrier;
+        }
+        return null;
+    }
+
+    public LaserBarrier getNearbyLaser(double x, double y) {
+        LaserBarrier nearest = null;
+        double nearestDistance = 60;
+        for (LaserBarrier barrier : laserBarriers) {
+            Rectangle bounds = barrier.getBounds();
+            double distance = Point.distance(x, y, bounds.getCenterX(), bounds.getCenterY());
+            if (distance < nearestDistance) {
+                nearest = barrier;
+                nearestDistance = distance;
+            }
+        }
+        return nearest;
+    }
+
+    public MovableObject getMovableObjectIntersecting(Rectangle bounds) {
+        for (MovableObject object : movableObjects) {
+            if (bounds.intersects(object.getBounds())) return object;
+        }
+        return null;
+    }
+
+    public MovableObject getNearbyMovableObject(double x, double y) {
+        MovableObject nearest = null;
+        double nearestDistance = 52;
+        for (MovableObject object : movableObjects) {
+            Rectangle bounds = object.getBounds();
+            double distance = Point.distance(x, y, bounds.getCenterX(), bounds.getCenterY());
+            if (distance < nearestDistance) {
+                nearest = object;
+                nearestDistance = distance;
+            }
+        }
+        return nearest;
+    }
+
+    public boolean tryPushObject(Rectangle nextActor, double dx, double dy, boolean sprinting) {
+        for (MovableObject object : movableObjects) {
+            Rectangle objectBounds = object.getBounds();
+            if (!nextActor.intersects(objectBounds)) continue;
+            if (!object.canMove(sprinting)) return false;
+
+            Rectangle overlap = nextActor.intersection(objectBounds);
+            double pushX = 0;
+            double pushY = 0;
+            if (Math.abs(dx) >= Math.abs(dy) && dx != 0) {
+                pushX = Math.copySign(overlap.width + 2.0, dx);
+            } else if (dy != 0) {
+                pushY = Math.copySign(overlap.height + 2.0, dy);
+            }
+            Rectangle destination = new Rectangle(
+                (int) Math.round(objectBounds.x + pushX),
+                (int) Math.round(objectBounds.y + pushY),
+                objectBounds.width, objectBounds.height);
+            if (!canObjectOccupy(object, destination)) return false;
+            object.moveBy(pushX, pushY);
+            return !nextActor.intersects(object.getBounds());
+        }
+        return false;
+    }
+
+    private boolean canObjectOccupy(MovableObject movingObject, Rectangle destination) {
+        for (Rectangle solid : solids) if (destination.intersects(solid)) return false;
+        for (MovableObject other : movableObjects) {
+            if (other != movingObject && destination.intersects(other.getBounds())) return false;
+        }
+        for (LaserBarrier barrier : laserBarriers) {
+            if (barrier.isActive() && destination.intersects(barrier.getBounds())) return false;
+        }
+        return true;
+    }
+
+    public SecretPassage discoverNearbyPassage(double x, double y) {
+        for (SecretPassage passage : secretPassages) {
+            if (passage.discover(x, y)) return passage;
+        }
+        return null;
+    }
+
+    public SecretPassage discoverPassageByApproach(double x, double y) {
+        for (SecretPassage passage : secretPassages) {
+            if (passage.discoverByApproach(x, y)) return passage;
+        }
+        return null;
+    }
+
+    public SecretPassage getNearbyPassage(double x, double y) {
+        for (SecretPassage passage : secretPassages) {
+            if (passage.isNear(x, y)) return passage;
+        }
+        return null;
+    }
+
+    public Point traversePassage(Rectangle actor) {
+        for (SecretPassage passage : secretPassages) {
+            Point destination = passage.traverse(actor);
+            if (destination != null) return destination;
+        }
+        return null;
     }
 
     public boolean canStandAt(double x, double y, int width, int height) {
@@ -86,7 +240,32 @@ public final class MuseumMap {
     public boolean hasLineOfSight(double x1, double y1, double x2, double y2) {
         Line2D.Double ray = new Line2D.Double(x1, y1, x2, y2);
         for (Rectangle solid : solids) if (ray.intersects(solid)) return false;
+        for (MovableObject object : movableObjects) if (ray.intersects(object.getBounds())) return false;
+        for (SecretPassage passage : secretPassages) {
+            if (!passage.isDiscovered()
+                && (ray.intersects(passage.getFirstEntrance()) || ray.intersects(passage.getSecondEntrance()))) {
+                return false;
+            }
+        }
         return true;
+    }
+
+    public Point2D.Double getVisionEndpoint(double x, double y, double angle, double radius) {
+        double endX = x + Math.cos(angle) * radius;
+        double endY = y + Math.sin(angle) * radius;
+        if (hasLineOfSight(x, y, endX, endY)) return new Point2D.Double(endX, endY);
+
+        double visible = 0;
+        double blocked = radius;
+        for (int i = 0; i < 10; i++) {
+            double distance = (visible + blocked) / 2.0;
+            double testX = x + Math.cos(angle) * distance;
+            double testY = y + Math.sin(angle) * distance;
+            if (hasLineOfSight(x, y, testX, testY)) visible = distance;
+            else blocked = distance;
+        }
+        double distance = Math.max(0, visible - 2);
+        return new Point2D.Double(x + Math.cos(angle) * distance, y + Math.sin(angle) * distance);
     }
 
     public List<Point> findPath(double fromX, double fromY, double toX, double toY, int actorWidth, int actorHeight) {
@@ -176,12 +355,16 @@ public final class MuseumMap {
     }
 
     public void draw(Graphics2D g) {
-        g.setColor(new Color(93, 66, 54));
+        draw(g, Double.NaN, Double.NaN);
+    }
+
+    public void draw(Graphics2D g, double playerX, double playerY) {
+        g.setColor(level.getFloorA().darker());
         g.fillRect(0, 0, WIDTH, HEIGHT);
         for (int y = 90; y < 540; y += 40) {
             for (int x = 24; x < 936; x += 40) {
                 g.setColor(((x / 40 + y / 40) & 1) == 0
-                    ? new Color(125, 91, 70) : new Color(114, 81, 65));
+                    ? level.getFloorA() : level.getFloorB());
                 g.fillRect(x, y, 40, 40);
                 g.setColor(new Color(48, 40, 42, 100));
                 g.drawRect(x, y, 40, 40);
@@ -193,7 +376,11 @@ public final class MuseumMap {
         drawRug(g, 53, 425, 184, 64);
         drawCases(g);
         drawBenches(g);
+        drawStatues(g);
+        drawMovableObjects(g);
+        drawSecretPassages(g, playerX, playerY);
         drawWalls(g);
+        drawSecurity(g);
     }
 
     private void drawRug(Graphics2D g, int x, int y, int width, int height) {
@@ -236,9 +423,146 @@ public final class MuseumMap {
         }
     }
 
+    private void drawStatues(Graphics2D g) {
+        for (Rectangle r : statues) {
+            g.setColor(new Color(0, 0, 0, 115));
+            g.fillOval(r.x - 3, r.y + r.height - 4, r.width + 8, 10);
+            g.setColor(new Color(124, 120, 108));
+            g.fillRect(r.x + 5, r.y + 12, r.width - 10, r.height - 12);
+            g.fillOval(r.x + 3, r.y + 2, r.width - 6, 20);
+            g.setColor(new Color(189, 176, 142));
+            g.fillRect(r.x + 8, r.y + 6, r.width - 16, 5);
+            g.setColor(new Color(81, 77, 73));
+            g.fillRect(r.x + 3, r.y + r.height - 5, r.width - 6, 5);
+        }
+    }
+
+    private void drawMovableObjects(Graphics2D g) {
+        for (MovableObject object : movableObjects) {
+            Rectangle r = object.getBounds();
+            if (object.getName().toLowerCase().contains("plinth")
+                || object.getName().toLowerCase().contains("sarcophagus")
+                || object.getName().toLowerCase().contains("stand")) {
+                g.setColor(new Color(0, 0, 0, 100));
+                g.fillRect(r.x + 4, r.y + r.height - 2, r.width, 7);
+                g.setColor(new Color(90, 83, 75));
+                g.fillRect(r.x + 3, r.y + 5, r.width - 6, r.height - 5);
+                g.setColor(new Color(165, 151, 124));
+                g.fillRect(r.x, r.y, r.width, 7);
+                g.setColor(new Color(213, 192, 150));
+                g.fillRect(r.x + 4, r.y + 2, r.width - 8, 2);
+            } else if (object.getName().toLowerCase().contains("cart")
+                || object.getName().toLowerCase().contains("trolley")) {
+                g.setColor(new Color(41, 43, 47));
+                g.fillRect(r.x + 2, r.y + 5, r.width - 4, r.height - 8);
+                g.setColor(new Color(151, 105, 61));
+                g.fillRect(r.x + 4, r.y + 2, r.width - 8, r.height - 8);
+                g.setColor(new Color(219, 176, 105));
+                g.drawLine(r.x + 6, r.y + 5, r.x + r.width - 6, r.y + 5);
+                g.setColor(new Color(29, 30, 34));
+                g.fillOval(r.x + 4, r.y + r.height - 5, 6, 6);
+                g.fillOval(r.x + r.width - 10, r.y + r.height - 5, 6, 6);
+            } else {
+                g.setColor(new Color(0, 0, 0, 95));
+                g.fillRect(r.x + 3, r.y + r.height - 1, r.width, 6);
+                g.setColor(new Color(102, 62, 42));
+                g.fillRect(r.x, r.y, r.width, r.height);
+                g.setColor(new Color(162, 108, 61));
+                g.fillRect(r.x + 3, r.y + 3, r.width - 6, r.height - 6);
+                g.setColor(new Color(221, 175, 105));
+                g.drawRect(r.x + 3, r.y + 3, r.width - 7, r.height - 7);
+            }
+            g.setColor(object.isMovable() ? new Color(227, 192, 121) : new Color(130, 123, 112));
+            g.drawRect(r.x - 1, r.y - 1, r.width + 2, r.height + 2);
+        }
+    }
+
+    private void drawSecretPassages(Graphics2D g, double playerX, double playerY) {
+        for (SecretPassage passage : secretPassages) {
+            drawPassageEntrance(g, passage.getFirstEntrance(), passage, playerX, playerY);
+            drawPassageEntrance(g, passage.getSecondEntrance(), passage, playerX, playerY);
+        }
+    }
+
+    private void drawPassageEntrance(Graphics2D g, Rectangle entrance, SecretPassage passage,
+                                     double playerX, double playerY) {
+        double distance = Double.isNaN(playerX) ? Double.MAX_VALUE
+            : Point.distance(playerX, playerY, entrance.getCenterX(), entrance.getCenterY());
+        boolean discovered = passage.isDiscovered();
+        boolean reveal = discovered || distance < 54;
+        g.setColor(new Color(0, 0, 0, 85));
+        g.fillRect(entrance.x + 2, entrance.y + 3, entrance.width, entrance.height);
+        g.setColor(new Color(76, 48, 37));
+        g.fillRect(entrance.x, entrance.y, entrance.width, entrance.height);
+        g.setColor(new Color(138, 90, 52));
+        g.fillRect(entrance.x + 3, entrance.y + 3, entrance.width - 6, entrance.height - 6);
+        g.setColor(new Color(202, 158, 96));
+        g.drawLine(entrance.x + 7, entrance.y + 5, entrance.x + 7, entrance.y + entrance.height - 5);
+        g.drawLine(entrance.x + 14, entrance.y + 5, entrance.x + 14, entrance.y + entrance.height - 5);
+        g.drawLine(entrance.x + 21, entrance.y + 5, entrance.x + 21, entrance.y + entrance.height - 5);
+        if (reveal) {
+            int alpha = discovered ? 180 : 90;
+            g.setColor(new Color(238, 198, 112, alpha));
+            g.drawRect(entrance.x - 3, entrance.y - 3, entrance.width + 6, entrance.height + 6);
+            if (discovered) {
+                g.setColor(new Color(107, 212, 159, 170));
+                g.drawRect(entrance.x - 5, entrance.y - 5, entrance.width + 10, entrance.height + 10);
+                if (passage.getRevealProgress() < 1) {
+                    int radius = 5 + (int) (passage.getRevealProgress() * 22);
+                    g.setColor(new Color(119, 239, 177,
+                        (int) (160 * (1 - passage.getRevealProgress()))));
+                    g.drawOval((int) entrance.getCenterX() - radius,
+                        (int) entrance.getCenterY() - radius, radius * 2, radius * 2);
+                }
+                g.setFont(new java.awt.Font("Monospaced", java.awt.Font.BOLD, 8));
+                g.drawString("SECRET", entrance.x - 2, entrance.y - 6);
+            }
+        }
+    }
+
+    private void drawSecurity(Graphics2D g) {
+        for (Rectangle securitySwitch : switches) {
+            g.setColor(new Color(35, 40, 42));
+            g.fillRect(securitySwitch.x, securitySwitch.y, securitySwitch.width, securitySwitch.height);
+            g.setColor(new Color(223, 185, 101));
+            g.fillRect(securitySwitch.x + 5, securitySwitch.y + 5, securitySwitch.width - 10, 4);
+            g.setColor(new Color(118, 196, 123));
+            g.fillOval((int) securitySwitch.getCenterX() - 3, (int) securitySwitch.getCenterY(), 6, 6);
+        }
+        for (LaserBarrier barrier : laserBarriers) {
+            Rectangle laser = barrier.getBounds();
+            if (barrier.getState() == LaserBarrier.State.DISABLED) {
+                g.setColor(new Color(103, 207, 135, 70));
+                g.drawRect(laser.x, laser.y, laser.width, laser.height);
+                continue;
+            }
+            if (barrier.getState() == LaserBarrier.State.INACTIVE) {
+                g.setColor(new Color(97, 179, 197, 90));
+                g.drawRect(laser.x, laser.y, laser.width, laser.height);
+                continue;
+            }
+            if (barrier.getState() == LaserBarrier.State.WARNING) {
+                int alpha = (int) (90 + 100 * barrier.getStateProgress());
+                g.setColor(new Color(255, 190, 62, alpha));
+                g.fillRect(laser.x, laser.y, laser.width, laser.height);
+                g.setColor(new Color(255, 225, 125));
+                g.drawRect(laser.x - 2, laser.y - 2, laser.width + 4, laser.height + 4);
+                g.setFont(new java.awt.Font("Monospaced", java.awt.Font.BOLD, 8));
+                g.drawString("WARNING", laser.x + laser.width + 4, laser.y + 10);
+            } else {
+                g.setColor(new Color(186, 49, 56, 105));
+                g.fillRect(laser.x, laser.y, laser.width, laser.height);
+                g.setColor(new Color(255, 75, 76));
+                g.fillRect(laser.x + laser.width / 2 - 2, laser.y, 4, laser.height);
+                g.setColor(new Color(255, 120, 110, 75));
+                g.drawRect(laser.x - 2, laser.y - 2, laser.width + 4, laser.height + 4);
+            }
+        }
+    }
+
     private void drawWalls(Graphics2D g) {
         for (Rectangle wall : solids) {
-            if (cases.contains(wall) || benches.contains(wall)) continue;
+            if (cases.contains(wall) || benches.contains(wall) || statues.contains(wall)) continue;
             g.setColor(new Color(31, 28, 35));
             g.fillRect(wall.x, wall.y, wall.width, wall.height);
             g.setColor(new Color(103, 72, 57));
@@ -246,17 +570,20 @@ public final class MuseumMap {
             g.setColor(new Color(61, 48, 48));
             g.drawRect(wall.x, wall.y, wall.width, wall.height);
         }
-        g.setColor(new Color(205, 166, 100));
-        g.fillRect(exit.x + 5, exit.y, exit.width - 10, 5);
-        g.setColor(new Color(64, 39, 42));
-        g.fillRect(exit.x + 5, exit.y + 5, exit.width - 10, exit.height - 5);
-        g.setColor(new Color(144, 78, 60));
-        g.fillRect(exit.x + 10, exit.y + 10, exit.width - 20, exit.height - 10);
-        g.setColor(new Color(235, 197, 119));
-        g.fillRect(exit.x + exit.width - 13, exit.y + exit.height / 2, 3, 5);
-        g.setFont(new java.awt.Font("Monospaced", java.awt.Font.BOLD, 9));
-        g.setColor(new Color(243, 221, 175));
-        g.drawString("EXIT", exit.x + 8, exit.y - 5);
+        for (int i = 0; i < exits.size(); i++) {
+            Rectangle exit = exits.get(i);
+            g.setColor(new Color(205, 166, 100));
+            g.fillRect(exit.x + 5, exit.y, exit.width - 10, 5);
+            g.setColor(new Color(64, 39, 42));
+            g.fillRect(exit.x + 5, exit.y + 5, exit.width - 10, exit.height - 5);
+            g.setColor(new Color(144, 78, 60));
+            g.fillRect(exit.x + 10, exit.y + 10, exit.width - 20, exit.height - 10);
+            g.setColor(new Color(235, 197, 119));
+            g.fillRect(exit.x + exit.width - 13, exit.y + exit.height / 2, 3, 5);
+            g.setFont(new java.awt.Font("Monospaced", java.awt.Font.BOLD, 9));
+            g.setColor(new Color(243, 221, 175));
+            g.drawString("EXIT", exit.x + 8, exit.y - 5);
+        }
     }
 
     private static final class Node {
