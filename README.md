@@ -28,12 +28,24 @@ java -cp $build Main
 - **P:** Pause or resume; **R** restarts while paused
 - **Esc:** Pause, then return to the main menu
 
+Resize the game window to adjust its size while keeping the original aspect
+ratio, or press **F11** to toggle full screen.
+
 Walk into light props to push them; sprint to move heavy carts. Pushing makes
 noise, and props block guard and camera sight lines. Watch laser warning flashes
 and cross only while the beams are inactive. Cameras need sustained sight of
 you to raise an alarm; walls, props, hiding spots, and the timed security switch
 can break their tracking. Approach a suspicious bookcase or search it with
 **E** to reveal a secret passage, then walk into either entrance to use it.
+
+The game extracts guard idle, walk, and run frames directly from
+`assets/sprites/Guard/Guard Sprite Sheet.jpeg` at startup. The four directions
+are front, back, left, and right. If exported atlases are available, the game
+uses them; otherwise, it extracts the frames directly in memory. To export
+transparent frame atlases, compile `src\GuardSpriteSheetExtractor.java` with
+the other Java files and run `java GuardSpriteSheetExtractor` from the project
+root. This creates `idle.png`, `walk.png`, and `run.png` in the guard asset
+folder, with direction rows and frame columns.
 
 Choose an unlocked museum from the level-selection screen. Complete a heist to
 unlock the next museum; scores, stars, best times, and rewards are tracked for

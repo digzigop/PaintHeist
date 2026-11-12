@@ -1,5 +1,4 @@
 import javax.swing.JPanel;
-import javax.swing.SwingUtilities;
 import javax.swing.Timer;
 import java.awt.Color;
 import java.awt.Dimension;
@@ -9,62 +8,87 @@ import java.awt.GradientPaint;
 import java.awt.Graphics;
 import java.awt.Graphics2D;
 import java.awt.RenderingHints;
+import java.awt.image.BufferedImage;
+import java.util.function.Consumer;
 
 public class LoadingPanel extends JPanel {
     private static final long serialVersionUID = 1L;
+    private static final int WIDTH = 960;
+    private static final int HEIGHT = 600;
     private static final int BAR_X = 300;
     private static final int BAR_Y = 440;
     private static final int BAR_WIDTH = 360;
+    private static final int FINAL_ANIMATION_TICKS = 18;
     private int progress;
+    private int finalAnimationTicks;
+    private long animationFrame;
     private final Timer timer;
-    private final Runnable onFinished;
+    private final Consumer<GamePanel.Assets> onFinished;
+    private GamePanel.Assets assets;
+    private boolean finished;
     private final Color gold = new Color(225, 181, 100);
 
-    public LoadingPanel(Runnable onFinished) {
+    public LoadingPanel(Consumer<GamePanel.Assets> onFinished) {
         this.onFinished = onFinished;
         setBackground(new Color(12, 12, 17));
-        setPreferredSize(new Dimension(960, 600));
+        setPreferredSize(new Dimension(WIDTH, HEIGHT));
         setDoubleBuffered(true);
 
         timer = new Timer(35, event -> {
-            progress = Math.min(100, progress + 1);
+            if (progress < 100) progress++;
+            animationFrame++;
+            if (progress == 100 && assets != null) finalAnimationTicks++;
             repaint();
-            if (progress == 100) {
-                ((Timer) event.getSource()).stop();
-                SwingUtilities.invokeLater(this.onFinished);
-            }
+            finishIfReady();
         });
         timer.start();
+    }
+
+    void setAssets(GamePanel.Assets assets) {
+        this.assets = assets;
+        repaint();
+        finishIfReady();
+    }
+
+    private void finishIfReady() {
+        if (finished || progress < 100 || assets == null
+            || finalAnimationTicks < FINAL_ANIMATION_TICKS) return;
+        finished = true;
+        timer.stop();
+        onFinished.accept(assets);
     }
 
     @Override
     protected void paintComponent(Graphics graphics) {
         super.paintComponent(graphics);
         Graphics2D g = (Graphics2D) graphics.create();
-        int width = getWidth();
-        int height = getHeight();
+        double scale = Math.min(getWidth() / (double) WIDTH, getHeight() / (double) HEIGHT);
+        double offsetX = (getWidth() - WIDTH * scale) / 2;
+        double offsetY = (getHeight() - HEIGHT * scale) / 2;
+        g.translate(offsetX, offsetY);
+        g.scale(scale, scale);
         g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_NEAREST_NEIGHBOR);
-        g.setPaint(new GradientPaint(0, 0, new Color(28, 25, 36), width, height, new Color(8, 8, 12)));
-        g.fillRect(0, 0, width, height);
+        g.setPaint(new GradientPaint(0, 0, new Color(28, 25, 36), WIDTH, HEIGHT, new Color(8, 8, 12)));
+        g.fillRect(0, 0, WIDTH, HEIGHT);
         g.setColor(new Color(130, 103, 64));
-        g.drawRect(30, 30, width - 60, height - 60);
+        g.drawRect(30, 30, WIDTH - 60, HEIGHT - 60);
         g.setColor(gold);
         g.fillRect(30, 30, 70, 3);
         g.fillRect(30, 30, 3, 70);
-        g.fillRect(width - 100, height - 33, 70, 3);
-        g.fillRect(width - 33, height - 100, 3, 70);
+        g.fillRect(WIDTH - 100, HEIGHT - 33, 70, 3);
+        g.fillRect(WIDTH - 33, HEIGHT - 100, 3, 70);
 
         g.setFont(new Font("Monospaced", Font.BOLD, 34));
         g.setColor(gold);
-        drawCentered(g, "PAINTHEIST", width / 2, 105);
-        drawLoadingArtwork(g, width / 2, 190);
+        drawCentered(g, "PAINTHEIST", WIDTH / 2, 105);
+        drawLoadingArtwork(g, WIDTH / 2, 190);
 
         g.setFont(new Font("Monospaced", Font.PLAIN, 13));
         g.setColor(new Color(204, 197, 207));
-        drawCentered(g, "Every masterpiece hides a secret.", width / 2, 355);
+        drawCentered(g, "Every masterpiece hides a secret.", WIDTH / 2, 355);
         g.setFont(new Font("Monospaced", Font.PLAIN, 10));
         g.setColor(new Color(158, 151, 166));
-        drawCentered(g, "SECURITY IS CLOSING IN...", width / 2, 384);
+        drawCentered(g, "SECURITY IS CLOSING IN...", WIDTH / 2, 384);
 
         g.setColor(new Color(48, 43, 53));
         g.fillRect(BAR_X, BAR_Y, BAR_WIDTH, 12);
@@ -75,10 +99,10 @@ public class LoadingPanel extends JPanel {
         drawRunningPair(g);
         g.setFont(new Font("Monospaced", Font.PLAIN, 12));
         g.setColor(Color.WHITE);
-        drawCentered(g, "PREPARING THE HEIST... " + progress + "%", width / 2, BAR_Y + 34);
+        drawCentered(g, "PREPARING THE HEIST... " + progress + "%", WIDTH / 2, BAR_Y + 34);
         g.setFont(new Font("Monospaced", Font.PLAIN, 10));
         g.setColor(new Color(128, 121, 135));
-        drawCentered(g, "404 TULOG PRODUCTIONS", width / 2, height - 48);
+        drawCentered(g, "404 TULOG PRODUCTIONS", WIDTH / 2, HEIGHT - 48);
         g.dispose();
     }
 
@@ -109,9 +133,24 @@ public class LoadingPanel extends JPanel {
         int travel = BAR_WIDTH - 28;
         int thiefCenterX = BAR_X + 14 + travel * progress / 100;
         int guardCenterX = Math.max(BAR_X + 10, thiefCenterX - 42);
-        int step = progress / 8 % 2;
-        drawRunner(g, guardCenterX, BAR_Y - 9, step, false);
-        drawRunner(g, thiefCenterX, BAR_Y - 9, step, true);
+        if (assets == null) {
+            int step = (int) (animationFrame / 4 % 2);
+            drawRunner(g, guardCenterX, BAR_Y - 9, step, false);
+            drawRunner(g, thiefCenterX, BAR_Y - 9, step, true);
+            return;
+        }
+
+        BufferedImage[] thiefFrames = assets.getThiefLoadingFrames();
+        BufferedImage[] guardFrames = assets.getGuardLoadingFrames();
+        int thiefFrame = (int) (animationFrame / 4 % thiefFrames.length);
+        int guardFrame = (int) (animationFrame / 5 % guardFrames.length);
+        drawSpriteRunner(g, guardFrames[guardFrame], guardCenterX, BAR_Y - 2, 24, 48);
+        drawSpriteRunner(g, thiefFrames[thiefFrame], thiefCenterX, BAR_Y - 2, 28, 44);
+    }
+
+    private void drawSpriteRunner(Graphics2D g, BufferedImage sprite, int centerX, int baseline,
+                                  int width, int height) {
+        g.drawImage(sprite, centerX - width / 2, baseline - height, width, height, null);
     }
 
     private void drawRunner(Graphics2D g, int centerX, int groundY, int step, boolean thief) {

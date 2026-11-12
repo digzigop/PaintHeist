@@ -27,6 +27,7 @@ public final class Guard {
     private double pathEndY;
     private boolean pathCalculated;
     private boolean pathReachable;
+    private boolean moving;
     private List<Point> path = new ArrayList<>();
     private boolean playerVisible;
 
@@ -46,6 +47,8 @@ public final class Guard {
     public void update(double dt, MuseumMap map, double playerX, double playerY, boolean hidden,
                        boolean sprinting, boolean hasNoise, double noiseX, double noiseY,
                        double noiseRadius) {
+        double previousX = x;
+        double previousY = y;
         double playerCenterX = playerX + 10;
         double playerCenterY = playerY + 12;
         double distance = Point.distance(centerX(), centerY(), playerCenterX, playerCenterY);
@@ -124,6 +127,7 @@ public final class Guard {
                 }
                 break;
         }
+        moving = Math.abs(x - previousX) > 0.01 || Math.abs(y - previousY) > 0.01;
     }
 
     private boolean inVisionCone(double px, double py) {
@@ -169,10 +173,17 @@ public final class Guard {
         double step = Math.min(distance, speed * dt);
         double vx = dx / distance * step;
         double vy = dy / distance * step;
+        double previousX = x;
+        double previousY = y;
         moveAxis(vx, 0, map);
         moveAxis(0, vy, map);
-        facingX = dx / distance;
-        facingY = dy / distance;
+        double movedX = x - previousX;
+        double movedY = y - previousY;
+        double movedDistance = Math.hypot(movedX, movedY);
+        if (movedDistance > 0.001) {
+            facingX = movedX / movedDistance;
+            facingY = movedY / movedDistance;
+        }
     }
 
     private void moveAxis(double dx, double dy, MuseumMap map) {
@@ -224,5 +235,6 @@ public final class Guard {
     public State getState() { return state; }
     public String getName() { return name; }
     public boolean isPlayerVisible() { return playerVisible; }
+    public boolean isMoving() { return moving; }
     public Point getFacing() { return new Point((int) Math.round(facingX * 100), (int) Math.round(facingY * 100)); }
 }

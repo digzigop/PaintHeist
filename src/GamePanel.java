@@ -19,6 +19,9 @@ import java.awt.RadialGradientPaint;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
+import java.net.URISyntaxException;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.HashSet;
 import java.util.Set;
 
@@ -26,16 +29,35 @@ public class GamePanel extends JPanel {
     private static final long serialVersionUID = 1L;
     private enum Screen { MENU, LEVEL_SELECT, PLAYING, PAUSED, VICTORY, GAME_OVER }
 
+    static final class Assets {
+        private final BufferedImage[][] playerSprites;
+        private final BufferedImage[][][] guardSprites;
+
+        private Assets(BufferedImage[][] playerSprites, BufferedImage[][][] guardSprites) {
+            this.playerSprites = playerSprites;
+            this.guardSprites = guardSprites;
+        }
+
+        BufferedImage[] getThiefLoadingFrames() {
+            return playerSprites[ACTION_ROW_START[WALK_ACTION] + 3];
+        }
+
+        BufferedImage[] getGuardLoadingFrames() {
+            return guardSprites[1][3];
+        }
+    }
+
     private static final int WIDTH = MuseumMap.WIDTH;
     private static final int HEIGHT = MuseumMap.HEIGHT;
     private static final Color GOLD = new Color(231, 190, 105);
     private static final Color INK = new Color(15, 17, 24);
-    private static final int SPRITE_FRAME_WIDTH = 80;
-    private static final int SPRITE_FRAME_HEIGHT = 128;
     private static final int SPRITE_COLUMNS = 6;
     private static final int SPRITE_ROWS = 20;
+    private static final int SPRITE_STRIP_FRAME_COUNT = 4;
     private static final int SPRITE_WIDTH = 32;
     private static final int SPRITE_HEIGHT = 51;
+    private static final int GUARD_SPRITE_WIDTH = 32;
+    private static final int GUARD_SPRITE_HEIGHT = 64;
     private static final int[] ACTION_ROW_START = {0, 4, 8, 12, 16};
     private static final int IDLE_ACTION = 0;
     private static final int WALK_ACTION = 1;
@@ -46,14 +68,21 @@ public class GamePanel extends JPanel {
     private final GameLoop gameLoop;
     private final LevelManager levelManager = new LevelManager();
     private final BufferedImage[][] playerSpriteFrames;
+    private final BufferedImage[][][] guardSprites;
     private GameWorld world;
     private LevelManager.Result lastResult;
     private Screen screen = Screen.MENU;
     private int selectedLevel;
     private long animationFrame;
+    private int playerDirectionRow = 1;
 
     public GamePanel() {
-        playerSpriteFrames = loadPlayerSpriteFrames();
+        this(loadAssets());
+    }
+
+    GamePanel(Assets assets) {
+        playerSpriteFrames = assets.playerSprites;
+        guardSprites = assets.guardSprites;
         setPreferredSize(new java.awt.Dimension(WIDTH, HEIGHT));
         setFocusable(true);
         setBackground(INK);
@@ -61,10 +90,23 @@ public class GamePanel extends JPanel {
         addMouseListener(new MouseAdapter() {
             @Override
             public void mousePressed(MouseEvent event) {
-                handleClick(event.getX(), event.getY());
+                double scale = Math.min(getWidth() / (double) WIDTH, getHeight() / (double) HEIGHT);
+                double offsetX = (getWidth() - WIDTH * scale) / 2;
+                double offsetY = (getHeight() - HEIGHT * scale) / 2;
+                if (event.getX() < offsetX || event.getX() >= offsetX + WIDTH * scale
+                    || event.getY() < offsetY || event.getY() >= offsetY + HEIGHT * scale) {
+                    return;
+                }
+                int x = (int) ((event.getX() - offsetX) / scale);
+                int y = (int) ((event.getY() - offsetY) / scale);
+                handleClick(x, y);
             }
         });
         gameLoop = new GameLoop(this::updateGame);
+    }
+
+    static Assets loadAssets() {
+        return new Assets(loadPlayerSpriteFrames(), loadGuardSprites());
     }
 
     private void installKeys() {
@@ -96,6 +138,7 @@ public class GamePanel extends JPanel {
         bindMove("Q", "distract", false);
         bindAction("P", "pause", () -> togglePause());
         bindAction("ESCAPE", "escape", () -> handleEscape());
+        bindAction("F11", "fullScreen", Main::toggleFullScreen);
         bindAction("ENTER", "enter", () -> {
             if (screen == Screen.MENU) screen = Screen.LEVEL_SELECT;
             else if (screen == Screen.LEVEL_SELECT) startSelectedLevel();
@@ -299,6 +342,11 @@ public class GamePanel extends JPanel {
             false,
             false
         );
+        if (input.left != input.right || input.up != input.down) {
+            double dx = (input.right ? 1 : 0) - (input.left ? 1 : 0);
+            double dy = (input.down ? 1 : 0) - (input.up ? 1 : 0);
+            playerDirectionRow = getPlayerDirectionRow(dx, dy);
+        }
         world.update(1.0 / 60.0, input);
         if (world.isWon()) {
             lastResult = levelManager.recordCompletion(world);
@@ -317,6 +365,11 @@ public class GamePanel extends JPanel {
     protected void paintComponent(Graphics graphics) {
         super.paintComponent(graphics);
         Graphics2D g = (Graphics2D) graphics.create();
+        double scale = Math.min(getWidth() / (double) WIDTH, getHeight() / (double) HEIGHT);
+        double offsetX = (getWidth() - WIDTH * scale) / 2;
+        double offsetY = (getHeight() - HEIGHT * scale) / 2;
+        g.translate(offsetX, offsetY);
+        g.scale(scale, scale);
         g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_OFF);
         g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_NEAREST_NEIGHBOR);
         if (screen == Screen.MENU) drawMenu(g);
@@ -509,30 +562,132 @@ public class GamePanel extends JPanel {
         int x = (int) Math.round(guard.getX());
         int y = (int) Math.round(guard.getY());
         boolean chasing = guard.getState() == Guard.State.CHASE;
-        Color shirt = chasing ? new Color(147, 50, 57) : new Color(49, 83, 69);
+        Point facing = guard.getFacing();
+        int direction = getGuardDirection(facing.x, facing.y);
+        int action = !guard.isMoving() ? 0 : chasing ? 2 : 1;
+        int ticksPerFrame = action == 0 ? 12 : action == 2 ? 4 : 7;
+        int frameCount = GuardSpriteSheetExtractor.getFrameCount(action, direction);
+        int frame = guard.isMoving() || action == 0
+            ? (int) (animationFrame / ticksPerFrame % frameCount) : 0;
         g.setColor(new Color(0, 0, 0, 90));
-        g.fillOval(x + 1, y + 17, 23, 8);
-        g.setColor(new Color(40, 34, 39));
-        g.fillRect(x + 4, y + 17, 6, 6);
-        g.fillRect(x + 15, y + 17, 6, 6);
-        g.setColor(shirt);
-        g.fillRect(x + 3, y + 7, 18, 13);
-        g.setColor(chasing ? new Color(214, 78, 71) : new Color(83, 130, 93));
-        g.fillRect(x + 6, y + 9, 12, 7);
-        g.setColor(new Color(219, 177, 82));
-        g.fillRect(x + 4, y + 16, 16, 2);
-        g.setColor(new Color(202, 151, 111));
-        g.fillRect(x + 6, y + 1, 13, 9);
-        g.setColor(new Color(43, 36, 43));
-        g.fillRect(x + 4, y, 17, 4);
-        g.setColor(new Color(244, 221, 172));
-        g.fillRect(x + 9, y + 5, 2, 2);
-        g.fillRect(x + 15, y + 5, 2, 2);
+        g.fillOval(x + 2, y + Guard.HEIGHT - 4, Guard.WIDTH - 4, 7);
+        g.drawImage(guardSprites[action][direction][frame], x - 4,
+            y + Guard.HEIGHT - GUARD_SPRITE_HEIGHT,
+            GUARD_SPRITE_WIDTH, GUARD_SPRITE_HEIGHT, null);
         if (guard.getState() == Guard.State.CHASE || guard.getState() == Guard.State.ALERT) {
             g.setFont(new Font("Monospaced", Font.BOLD, 14));
             g.setColor(chasing ? new Color(255, 87, 76) : GOLD);
-            g.drawString(chasing ? "!" : "?", x + 7, y - 5);
+            g.drawString(chasing ? "!" : "?", x + 7, y + Guard.HEIGHT - GUARD_SPRITE_HEIGHT - 3);
         }
+    }
+
+    private static int getGuardDirection(double facingX, double facingY) {
+        if (Math.abs(facingX) > Math.abs(facingY)) return facingX < 0 ? 2 : 3;
+        return facingY < 0 ? 1 : 0;
+    }
+
+    private static BufferedImage[][][] loadGuardSprites() {
+        try {
+            BufferedImage[][][] frames = loadGuardSpriteStrips();
+            if (frames != null) return frames;
+        } catch (IOException exception) {
+            // Fall back to the older generated atlas/sheet pipeline below.
+        }
+
+        String[] assetNames = {"idle.png", "walk.png", "run.png"};
+        BufferedImage[] atlases = new BufferedImage[assetNames.length];
+        try {
+            for (int i = 0; i < assetNames.length; i++) {
+                String assetPath = "assets/sprites/Guard/" + assetNames[i];
+                InputStream resource = GamePanel.class.getResourceAsStream("/" + assetPath);
+                if (resource != null) {
+                    try (InputStream input = resource) {
+                        atlases[i] = ImageIO.read(input);
+                    }
+                } else {
+                    atlases[i] = ImageIO.read(findProjectAsset(assetPath));
+                }
+                if (atlases[i] == null) throw new IOException("Unsupported guard atlas image: " + assetPath);
+            }
+            return GuardSpriteSheetExtractor.loadAtlases(atlases);
+        } catch (IOException exception) {
+            String sheetPath = "assets/sprites/Guard/Pixel Guard Animation Sprite Sheet.png";
+            try {
+                InputStream resource = GamePanel.class.getResourceAsStream("/" + sheetPath);
+                if (resource != null) {
+                    try (InputStream input = resource) {
+                        BufferedImage sheet = ImageIO.read(input);
+                        if (sheet == null) throw new IOException("Unsupported guard sprite sheet image.");
+                        return GuardSpriteSheetExtractor.loadFrames(sheet);
+                    }
+                }
+                return GuardSpriteSheetExtractor.loadFrames(findProjectAsset(sheetPath));
+            } catch (IOException fallbackException) {
+                fallbackException.addSuppressed(exception);
+                throw new IllegalStateException("Could not load guard sprites from the generated atlases "
+                    + "or the original sprite sheet.", fallbackException);
+            }
+        }
+    }
+
+    private static BufferedImage[][][] loadGuardSpriteStrips() throws IOException {
+        String[] directionFiles = {
+            "Guard Front Walk.png",
+            "Guard Back Walk.png",
+            "Guard Right Walk.png",
+            "Guard Left Walk.png"
+        };
+
+        BufferedImage idleStrip = readGuardSpriteStrip("Guard Idle.png");
+        BufferedImage[] walkStrips = new BufferedImage[directionFiles.length];
+        for (int i = 0; i < directionFiles.length; i++) {
+            walkStrips[i] = readGuardSpriteStrip(directionFiles[i]);
+        }
+
+        BufferedImage[][][] frames = new BufferedImage[3][4][4];
+        for (int direction = 0; direction < 4; direction++) {
+            frames[0][direction] = splitGuardSpriteStrip(idleStrip, 4);
+            frames[1][direction] = splitGuardSpriteStrip(walkStrips[direction], 4);
+            frames[2][direction] = frames[1][direction].clone();
+        }
+        return frames;
+    }
+
+    private static BufferedImage[] splitGuardSpriteStrip(BufferedImage sheet, int frameCount) throws IOException {
+        if (sheet == null) {
+            throw new IOException("Guard sprite strip is missing.");
+        }
+        if (sheet.getWidth() <= 0 || sheet.getHeight() <= 0) {
+            throw new IOException("Guard sprite strip dimensions are invalid: "
+                + sheet.getWidth() + "x" + sheet.getHeight() + ".");
+        }
+        int frameWidth = Math.max(1, sheet.getWidth() / frameCount);
+        BufferedImage[] frames = new BufferedImage[frameCount];
+        for (int index = 0; index < frameCount; index++) {
+            int left = index * sheet.getWidth() / frameCount;
+            int right = (index + 1) * sheet.getWidth() / frameCount;
+            frames[index] = sheet.getSubimage(left, 0, right - left, sheet.getHeight());
+        }
+        return frames;
+    }
+
+    private static BufferedImage readGuardSpriteStrip(String fileName) throws IOException {
+        String assetPath = "assets/sprites/Guard/" + fileName;
+        InputStream resource = GamePanel.class.getResourceAsStream("/" + assetPath);
+        if (resource != null) {
+            try (InputStream input = resource) {
+                BufferedImage image = ImageIO.read(input);
+                if (image == null) throw new IOException("Unsupported guard sprite image: " + assetPath);
+                return image;
+            }
+        }
+
+        File spriteFile = findProjectAsset(assetPath);
+        BufferedImage image = ImageIO.read(spriteFile);
+        if (image == null) {
+            throw new IOException("Unsupported guard sprite image: " + spriteFile.getAbsolutePath());
+        }
+        return image;
     }
 
     private void drawPlayer(Graphics2D g, GameWorld game) {
@@ -545,7 +700,8 @@ public class GamePanel extends JPanel {
         }
         g.setColor(new Color(0, 0, 0, 110));
         g.fillOval(x + 8, y + SPRITE_HEIGHT - 8, SPRITE_WIDTH - 16, 7);
-        g.drawImage(getPlayerSpriteFrame(game), x, y, SPRITE_WIDTH, SPRITE_HEIGHT, null);
+        BufferedImage frame = getPlayerSpriteFrame(game);
+        g.drawImage(frame, x, y, SPRITE_WIDTH, SPRITE_HEIGHT, null);
     }
 
     private BufferedImage getPlayerSpriteFrame(GameWorld game) {
@@ -562,12 +718,11 @@ public class GamePanel extends JPanel {
             ticksPerFrame = 6;
         } else {
             action = IDLE_ACTION;
-            ticksPerFrame = 12;
+            ticksPerFrame = 8;
         }
 
-        int directionRow = getPlayerDirectionRow(game.getPlayerFacingX(), game.getPlayerFacingY());
-        int frame = (int) (animationFrame / ticksPerFrame % SPRITE_COLUMNS);
-        return playerSpriteFrames[ACTION_ROW_START[action] + directionRow][frame];
+        int frame = (int) (animationFrame / ticksPerFrame % SPRITE_STRIP_FRAME_COUNT);
+        return playerSpriteFrames[ACTION_ROW_START[action] + playerDirectionRow][frame];
     }
 
     private static int getPlayerDirectionRow(double facingX, double facingY) {
@@ -577,47 +732,127 @@ public class GamePanel extends JPanel {
 
     private static BufferedImage[][] loadPlayerSpriteFrames() {
         try {
-            BufferedImage sheet = readPlayerSpriteSheet();
-            int expectedWidth = SPRITE_FRAME_WIDTH * SPRITE_COLUMNS;
-            int expectedHeight = SPRITE_FRAME_HEIGHT * SPRITE_ROWS;
-            if (sheet.getWidth() != expectedWidth || sheet.getHeight() != expectedHeight) {
-                throw new IOException("Unexpected thief atlas dimensions: " + sheet.getWidth() + "x"
-                    + sheet.getHeight() + " (expected " + expectedWidth + "x" + expectedHeight + ").");
-            }
+            BufferedImage[] idleFrames = splitSpriteStrip(readPlayerSpriteSheet("Idle.png"));
+            BufferedImage[] frontWalkFrames = splitSpriteStrip(readPlayerSpriteSheet("Front Walk.png"));
+            BufferedImage[] backWalkFrames = splitSpriteStrip(readPlayerSpriteSheet("Back.png"));
+            BufferedImage[] leftWalkFrames = splitSpriteStrip(readPlayerSpriteSheet("Left Walk.png"));
+            BufferedImage[] rightWalkFrames = splitSpriteStrip(readPlayerSpriteSheet("Right Walk.png"));
 
             BufferedImage[][] frames = new BufferedImage[SPRITE_ROWS][SPRITE_COLUMNS];
-            for (int row = 0; row < SPRITE_ROWS; row++) {
-                for (int column = 0; column < SPRITE_COLUMNS; column++) {
-                    frames[row][column] = sheet.getSubimage(
-                        column * SPRITE_FRAME_WIDTH, row * SPRITE_FRAME_HEIGHT,
-                        SPRITE_FRAME_WIDTH, SPRITE_FRAME_HEIGHT);
+            BufferedImage[][] directionalWalkFrames = {
+                buildAnimationFrames(frontWalkFrames),
+                buildAnimationFrames(backWalkFrames),
+                buildAnimationFrames(leftWalkFrames),
+                buildAnimationFrames(rightWalkFrames)
+            };
+
+            for (int direction = 0; direction < 4; direction++) {
+                frames[ACTION_ROW_START[IDLE_ACTION] + direction] = buildAnimationFrames(idleFrames);
+            }
+
+            for (int action = WALK_ACTION; action < ACTION_ROW_START.length; action++) {
+                for (int direction = 0; direction < 4; direction++) {
+                    frames[ACTION_ROW_START[action] + direction] = directionalWalkFrames[direction];
                 }
             }
             return frames;
         } catch (IOException exception) {
-            throw new IllegalStateException("Could not load the thief sprite atlas. Run PaintHeist from "
-                + "the project root so assets/sprites/thief/thief-spritesheet.png is available.", exception);
+            throw new IllegalStateException(
+                "Could not load the thief sprites. Make sure the files in assets/sprites/thief are present "
+                    + "(Front Walk.png, Back.png, Left Walk.png, Right Walk.png, Idle.png).",
+                exception);
         }
     }
 
-    private static BufferedImage readPlayerSpriteSheet() throws IOException {
-        String resourcePath = "/assets/sprites/thief/thief-spritesheet.png";
-        InputStream resource = GamePanel.class.getResourceAsStream(resourcePath);
-        if (resource != null) {
-            try (InputStream input = resource) {
-                BufferedImage image = ImageIO.read(input);
-                if (image == null) throw new IOException("Unsupported thief sprite atlas image.");
-                return image;
+    private static BufferedImage[] splitSpriteStrip(BufferedImage sheet) throws IOException {
+        int frameCount = SPRITE_STRIP_FRAME_COUNT;
+        if (sheet.getWidth() < frameCount || sheet.getHeight() <= 0) {
+            throw new IOException("Unexpected thief sprite strip dimensions: "
+                + sheet.getWidth() + "x" + sheet.getHeight() + ".");
+        }
+        BufferedImage[] frames = new BufferedImage[frameCount];
+        for (int index = 0; index < frameCount; index++) {
+            int left = index * sheet.getWidth() / frameCount;
+            int right = (index + 1) * sheet.getWidth() / frameCount;
+            frames[index] = sheet.getSubimage(left, 0, right - left, sheet.getHeight());
+        }
+        return frames;
+    }
+
+    private static BufferedImage[] buildAnimationFrames(BufferedImage[] frames) {
+        BufferedImage[] animationFrames = new BufferedImage[SPRITE_COLUMNS];
+        int sourceCount = Math.max(1, frames.length);
+        for (int index = 0; index < SPRITE_COLUMNS; index++) {
+            animationFrames[index] = frames[Math.min(index, sourceCount - 1)];
+        }
+        return animationFrames;
+    }
+
+    private static BufferedImage readPlayerSpriteSheet(String fileName) throws IOException {
+        String assetPath = "assets/sprites/thief/" + fileName;
+        File spriteFile = findProjectAssetFrom(new File("").getAbsoluteFile().toPath(), assetPath);
+        if (spriteFile == null) {
+            try {
+                Path classLocation = Paths.get(GamePanel.class.getProtectionDomain()
+                    .getCodeSource().getLocation().toURI());
+                if (!java.nio.file.Files.isDirectory(classLocation)) {
+                    classLocation = classLocation.getParent();
+                }
+                spriteFile = findProjectAssetFrom(classLocation, assetPath);
+            } catch (URISyntaxException exception) {
+                throw new IOException("Could not locate project sprites from the game classes.", exception);
             }
         }
 
-        File atlas = new File("assets/sprites/thief/thief-spritesheet.png");
-        if (!atlas.isFile()) {
-            throw new IOException("Sprite atlas not found: " + atlas.getAbsolutePath());
+        BufferedImage image;
+        if (spriteFile != null) {
+            image = ImageIO.read(spriteFile);
+            if (image == null) {
+                throw new IOException("Unsupported thief sprite sheet image: " + spriteFile.getAbsolutePath());
+            }
+        } else {
+            String resourcePath = "/" + assetPath;
+            try (InputStream resource = GamePanel.class.getResourceAsStream(resourcePath)) {
+                if (resource == null) throw new IOException("Game sprite not found: " + assetPath);
+                image = ImageIO.read(resource);
+                if (image == null) throw new IOException("Unsupported thief sprite sheet image: " + resourcePath);
+            }
         }
-        BufferedImage image = ImageIO.read(atlas);
-        if (image == null) throw new IOException("Unsupported thief sprite atlas image: " + atlas.getAbsolutePath());
-        return image;
+
+        BufferedImage argbImage = new BufferedImage(
+            image.getWidth(), image.getHeight(), BufferedImage.TYPE_INT_ARGB);
+        Graphics2D graphics = argbImage.createGraphics();
+        graphics.drawImage(image, 0, 0, null);
+        graphics.dispose();
+        return argbImage;
+    }
+
+    private static File findProjectAsset(String relativePath) throws IOException {
+        File asset = findProjectAssetFrom(new File("").getAbsoluteFile().toPath(), relativePath);
+        if (asset != null) return asset;
+
+        try {
+            Path classLocation = Paths.get(GamePanel.class.getProtectionDomain()
+                .getCodeSource().getLocation().toURI());
+            if (!java.nio.file.Files.isDirectory(classLocation)) {
+                classLocation = classLocation.getParent();
+            }
+            asset = findProjectAssetFrom(classLocation, relativePath);
+            if (asset != null) return asset;
+        } catch (URISyntaxException exception) {
+            throw new IOException("Could not locate project assets from the game classes.", exception);
+        }
+
+        throw new IOException("Game asset not found: " + relativePath
+            + " (searched the working directory and game class ancestors).");
+    }
+
+    private static File findProjectAssetFrom(Path directory, String relativePath) {
+        for (Path current = directory; current != null; current = current.getParent()) {
+            File candidate = current.resolve(relativePath).toFile();
+            if (candidate.isFile()) return candidate;
+        }
+        return null;
     }
 
     private void drawLighting(Graphics2D g, double x, double y) {
@@ -717,6 +952,7 @@ public class GamePanel extends JPanel {
         g.setColor(new Color(171, 166, 177));
         drawCentered(g, "Choose a museum and plan your route.", WIDTH / 2, 442);
         drawCentered(g, "Copy every masterpiece, leave a convincing fake, and reach the exit.", WIDTH / 2, 465);
+        drawCentered(g, "F11 TO TOGGLE FULL SCREEN", WIDTH / 2, 500);
         g.setColor(new Color(120, 113, 127));
         drawCentered(g, "404Tulog Productions", WIDTH / 2, 547);
     }

@@ -24,13 +24,15 @@ import org.w3c.dom.Node;
 
 public final class StudioSplashPanel extends JPanel {
     private static final long serialVersionUID = 1L;
+    private static final int WIDTH = 960;
+    private static final int HEIGHT = 600;
     private static final int STATIC_SPLASH_DURATION_MILLIS = 2500;
     private final Image logoImage;
     private final Runnable onFinished;
 
     public StudioSplashPanel(Runnable onFinished) {
         this.onFinished = onFinished;
-        setPreferredSize(new Dimension(960, 600));
+        setPreferredSize(new Dimension(WIDTH, HEIGHT));
         setBackground(new Color(10, 11, 17));
         setDoubleBuffered(true);
 
@@ -62,28 +64,31 @@ public final class StudioSplashPanel extends JPanel {
     protected void paintComponent(Graphics graphics) {
         super.paintComponent(graphics);
         Graphics2D g = (Graphics2D) graphics.create();
-        int width = getWidth();
-        int height = getHeight();
+        double scale = Math.min(getWidth() / (double) WIDTH, getHeight() / (double) HEIGHT);
+        double offsetX = (getWidth() - WIDTH * scale) / 2;
+        double offsetY = (getHeight() - HEIGHT * scale) / 2;
+        g.translate(offsetX, offsetY);
+        g.scale(scale, scale);
         g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_NEAREST_NEIGHBOR);
-        g.setPaint(new GradientPaint(0, 0, new Color(31, 28, 38), width, height, new Color(7, 9, 15)));
-        g.fillRect(0, 0, width, height);
+        g.setPaint(new GradientPaint(0, 0, new Color(31, 28, 38), WIDTH, HEIGHT, new Color(7, 9, 15)));
+        g.fillRect(0, 0, WIDTH, HEIGHT);
 
         g.setColor(new Color(119, 91, 59));
-        g.drawRect(30, 30, width - 60, height - 60);
+        g.drawRect(30, 30, WIDTH - 60, HEIGHT - 60);
         g.setColor(new Color(225, 181, 100));
         g.fillRect(30, 30, 68, 3);
         g.fillRect(30, 30, 3, 68);
-        g.fillRect(width - 98, height - 33, 68, 3);
-        g.fillRect(width - 33, height - 98, 3, 68);
+        g.fillRect(WIDTH - 98, HEIGHT - 33, 68, 3);
+        g.fillRect(WIDTH - 33, HEIGHT - 98, 3, 68);
 
         g.setFont(new Font("Monospaced", Font.BOLD, 15));
         g.setColor(new Color(197, 190, 201));
-        drawCentered(g, "404Tulog Productions", width / 2, 103);
+        drawCentered(g, "404Tulog Productions", WIDTH / 2, 103);
         g.setColor(new Color(225, 181, 100));
-        g.fillRect(width / 2 - 62, 119, 124, 2);
+        g.fillRect(WIDTH / 2 - 62, 119, 124, 2);
 
         int logoSize = 250;
-        int logoX = (width - logoSize) / 2;
+        int logoX = (WIDTH - logoSize) / 2;
         int logoY = 145;
         if (logoImage != null) {
             g.drawImage(logoImage, logoX, logoY, logoSize, logoSize, this);
@@ -93,19 +98,19 @@ public final class StudioSplashPanel extends JPanel {
             g.setColor(new Color(225, 181, 100));
             g.drawRect(logoX, logoY, logoSize, logoSize);
             g.setFont(new Font("Monospaced", Font.BOLD, 18));
-            drawCentered(g, "404TULOG", width / 2, logoY + 120);
+            drawCentered(g, "404TULOG", WIDTH / 2, logoY + 120);
         }
 
         g.setFont(new Font("Monospaced", Font.BOLD, 28));
         g.setColor(new Color(255, 219, 142));
-        drawCentered(g, "PAINTHEIST", width / 2, 443);
+        drawCentered(g, "PAINTHEIST", WIDTH / 2, 443);
         g.setFont(new Font("Monospaced", Font.PLAIN, 12));
         g.setColor(new Color(204, 197, 207));
-        drawCentered(g, "A 404Tulog Productions Game", width / 2, 468);
+        drawCentered(g, "A 404Tulog Productions Game", WIDTH / 2, 468);
 
         g.setFont(new Font("Monospaced", Font.PLAIN, 10));
         g.setColor(new Color(158, 151, 166));
-        drawCentered(g, "PRESENTS", width / 2, 526);
+        drawCentered(g, "PRESENTS", WIDTH / 2, 526);
         g.dispose();
     }
 
