@@ -1,0 +1,12 @@
+{
+  "frameWidth": 80,
+  "frameHeight": 128,
+  "framesPerDirection": 6,
+  "atlasColumns": 6,
+  "atlasRows": 20,
+  "rowOrder": ["idle-front", "idle-back", "idle-left", "idle-right", "walk-front", "walk-back", "walk-left", "walk-right", "run-front", "run-back", "run-left", "run-right", "sneak-front", "sneak-back", "sneak-left", "sneak-right", "jump-front", "jump-back", "jump-left", "jump-right"],
+  "actions": ["idle", "walk", "run", "sneak", "jump"],
+  "directions": ["front", "back", "left", "right"],
+  "sourceFrameCounts": {"idle": [3, 4, 4, 3], "walk": [6, 6, 6, 6], "run": [6, 6, 6, 6], "sneak": [6, 5, 5, 5], "jump": [5, 5, 5, 5]},
+  "missingFramePolicy": "Idle loops repeat available poses; other short sequences hold their final pose."
+}
