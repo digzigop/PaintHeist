@@ -38,9 +38,9 @@ public final class StudioSplashPanel extends JPanel {
 
         URL logoUrl = getClass().getResource("/logo.gif");
         if (logoUrl == null) logoUrl = getClass().getResource("logo.gif");
-        File gifFile = new File("src/logo.gif");
+        File gifFile = findSplashGif();
         Image loadedImage = logoUrl == null ? null : new ImageIcon(logoUrl).getImage();
-        if (logoUrl == null && gifFile.isFile()) {
+        if (logoUrl == null && gifFile != null && gifFile.isFile()) {
             try {
                 logoUrl = gifFile.toURI().toURL();
             } catch (java.net.MalformedURLException exception) {
@@ -159,6 +159,24 @@ public final class StudioSplashPanel extends JPanel {
         for (Node child = parent.getFirstChild(); child != null; child = child.getNextSibling()) {
             Node match = findNode(child, name);
             if (match != null) return match;
+        }
+        return null;
+    }
+
+    private static File findSplashGif() {
+        for (String candidatePath : new String[] {"src/logo.gif", "logo.gif"}) {
+            File direct = new File(candidatePath);
+            if (direct.isFile()) return direct;
+            try {
+                java.nio.file.Path classLocation = java.nio.file.Paths.get(
+                    StudioSplashPanel.class.getProtectionDomain().getCodeSource().getLocation().toURI());
+                for (java.nio.file.Path cur = classLocation; cur != null; cur = cur.getParent()) {
+                    File candidate = cur.resolve(candidatePath).toFile();
+                    if (candidate.isFile()) return candidate;
+                }
+            } catch (java.net.URISyntaxException ignored) {
+                // Fall back to static splash screen if location cannot be resolved.
+            }
         }
         return null;
     }

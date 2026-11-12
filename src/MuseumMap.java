@@ -4,6 +4,7 @@ import java.awt.Point;
 import java.awt.Rectangle;
 import java.awt.geom.Line2D;
 import java.awt.geom.Point2D;
+import java.awt.image.BufferedImage;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
@@ -31,6 +32,7 @@ public final class MuseumMap {
     private final List<LaserBarrier> laserBarriers = new ArrayList<>();
     private final List<MovableObject> movableObjects = new ArrayList<>();
     private final List<SecretPassage> secretPassages = new ArrayList<>();
+    private BufferedImage staticLayer;
     private double securityDisabledSeconds;
 
     public MuseumMap() {
@@ -77,7 +79,9 @@ public final class MuseumMap {
     public List<HideSpot> getHideSpots() { return Collections.unmodifiableList(hideSpots); }
     public List<Rectangle> getSolids() { return Collections.unmodifiableList(solids); }
     public List<Rectangle> getExits() { return Collections.unmodifiableList(exits); }
-    public Rectangle getExit() { return new Rectangle(exits.get(0)); }
+    public Rectangle getExit() {
+        return exits.isEmpty() ? new Rectangle() : new Rectangle(exits.get(0));
+    }
     public MuseumLevel getLevel() { return level; }
     public int getPaintingCount() { return paintings.size(); }
     public List<Rectangle> getLasers() { return Collections.unmodifiableList(lasers); }
@@ -104,9 +108,13 @@ public final class MuseumMap {
     }
 
     public boolean activateNearbySwitch(double x, double y) {
+        return activateNearbySwitch(x, y, 12);
+    }
+
+    public boolean activateNearbySwitch(double x, double y, double durationSeconds) {
         for (Rectangle securitySwitch : switches) {
             if (Point.distance(x, y, securitySwitch.getCenterX(), securitySwitch.getCenterY()) <= 48) {
-                securityDisabledSeconds = 12;
+                securityDisabledSeconds = durationSeconds;
                 for (LaserBarrier barrier : laserBarriers) barrier.update(0, true);
                 return true;
             }
@@ -231,6 +239,39 @@ public final class MuseumMap {
             if (destination != null) return destination;
         }
         return null;
+    }
+
+    public List<Point> traversePassageCandidates(Rectangle actor) {
+        for (SecretPassage passage : secretPassages) {
+            List<Point> candidates = passage.traverseCandidates(actor);
+            if (!candidates.isEmpty()) return candidates;
+        }
+        return Collections.emptyList();
+    }
+
+    /** Steps along a throw vector and stops before hitting walls or solid obstacles. */
+    public Point2D.Double getThrowTarget(double startX, double startY, double dirX, double dirY, double maxDistance) {
+        double lastX = Math.max(35, Math.min(WIDTH - 35, startX));
+        double lastY = Math.max(105, Math.min(HEIGHT - 35, startY));
+        int steps = Math.max(1, (int) Math.ceil(maxDistance / 8.0));
+        for (int i = 1; i <= steps; i++) {
+            double dist = maxDistance * i / steps;
+            double testX = Math.max(35, Math.min(WIDTH - 35, startX + dirX * dist));
+            double testY = Math.max(105, Math.min(HEIGHT - 35, startY + dirY * dist));
+            if (!isPointInSolid(testX, testY)) {
+                lastX = testX;
+                lastY = testY;
+            } else {
+                break;
+            }
+        }
+        return new Point2D.Double(lastX, lastY);
+    }
+
+    private boolean isPointInSolid(double x, double y) {
+        for (Rectangle solid : solids) if (solid.contains(x, y)) return true;
+        for (MovableObject object : movableObjects) if (object.getBounds().contains(x, y)) return true;
+        return false;
     }
 
     public boolean canStandAt(double x, double y, int width, int height) {
@@ -359,6 +400,16 @@ public final class MuseumMap {
     }
 
     public void draw(Graphics2D g, double playerX, double playerY) {
+        if (staticLayer == null) staticLayer = buildStaticLayer();
+        g.drawImage(staticLayer, 0, 0, null);
+        drawMovableObjects(g);
+        drawSecretPassages(g, playerX, playerY);
+        drawSecurity(g);
+    }
+
+    private BufferedImage buildStaticLayer() {
+        BufferedImage layer = new BufferedImage(WIDTH, HEIGHT, BufferedImage.TYPE_INT_ARGB);
+        Graphics2D g = layer.createGraphics();
         g.setColor(level.getFloorA().darker());
         g.fillRect(0, 0, WIDTH, HEIGHT);
         for (int y = 90; y < 540; y += 40) {
@@ -377,10 +428,9 @@ public final class MuseumMap {
         drawCases(g);
         drawBenches(g);
         drawStatues(g);
-        drawMovableObjects(g);
-        drawSecretPassages(g, playerX, playerY);
         drawWalls(g);
-        drawSecurity(g);
+        g.dispose();
+        return layer;
     }
 
     private void drawRug(Graphics2D g, int x, int y, int width, int height) {
@@ -603,6 +653,7 @@ public final class MuseumMap {
         boolean copied;
         boolean stolen;
         boolean discovered;
+        double copyProgress;
         int quality;
         double discoveryTime;
         double nearbyGuardTime;
@@ -621,6 +672,7 @@ public final class MuseumMap {
         public boolean isCopied() { return copied; }
         public boolean isStolen() { return stolen; }
         public boolean isDiscovered() { return discovered; }
+        public int getCopyProgress() { return (int) Math.round(copyProgress); }
         public int getQuality() { return quality; }
         public Rectangle getBounds() { return new Rectangle(x - 3, y - 3, WIDTH + 6, HEIGHT + 6); }
     }

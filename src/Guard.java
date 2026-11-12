@@ -23,6 +23,8 @@ public final class Guard {
     private double searchOffset;
     private double goalX;
     private double goalY;
+    private double searchAnchorX;
+    private double searchAnchorY;
     private double pathEndX;
     private double pathEndY;
     private boolean pathCalculated;
@@ -67,7 +69,10 @@ public final class Guard {
             lostSightTimer += dt;
             if (lostSightTimer >= 1.7) {
                 state = State.SEARCH;
+                searchAnchorX = goalX;
+                searchAnchorY = goalY;
                 searchTimer = 0;
+                searchOffset = 0;
                 stateTimer = 0;
             }
         }
@@ -110,7 +115,7 @@ public final class Guard {
                     if (searchTimer - searchOffset > 1.0) {
                         searchOffset = searchTimer;
                         double angle = searchTimer * 2.25;
-                        setGoal(goalX + Math.cos(angle) * 55, goalY + Math.sin(angle) * 42);
+                        setGoal(searchAnchorX + Math.cos(angle) * 55, searchAnchorY + Math.sin(angle) * 42);
                     }
                     moveTo(dt, map, goalX, goalY, patrolSpeed);
                 } else {
@@ -119,6 +124,11 @@ public final class Guard {
                 }
                 break;
             case RETURN:
+                if (patrolRoute.isEmpty()) {
+                    state = State.PATROL;
+                    stateTimer = 0;
+                    break;
+                }
                 Point waypoint = patrolRoute.get(patrolIndex);
                 moveTo(dt, map, waypoint.x, waypoint.y, patrolSpeed + 4);
                 if (hasReachedGoal(waypoint.x, waypoint.y)) {
@@ -224,8 +234,15 @@ public final class Guard {
     }
 
     public void setSearchTarget(double x, double y) {
+        searchAnchorX = x;
+        searchAnchorY = y;
         setGoal(x, y);
+        searchTimer = 0;
         searchOffset = 0;
+        if (state != State.CHASE) {
+            state = State.SEARCH;
+            stateTimer = 0;
+        }
     }
 
     public double getX() { return x; }

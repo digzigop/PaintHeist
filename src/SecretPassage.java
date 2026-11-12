@@ -1,5 +1,8 @@
 import java.awt.Point;
 import java.awt.Rectangle;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
 
 public final class SecretPassage {
     private final String name;
@@ -45,23 +48,44 @@ public final class SecretPassage {
     }
 
     public Point traverse(Rectangle actorBounds) {
-        if (!discovered) return null;
-        if (actorBounds.intersects(firstEntrance)) {
-            return landingPoint(firstEntrance, secondEntrance);
-        }
-        if (actorBounds.intersects(secondEntrance)) {
-            return landingPoint(secondEntrance, firstEntrance);
-        }
-        return null;
+        List<Point> candidates = traverseCandidates(actorBounds);
+        return candidates.isEmpty() ? null : candidates.get(0);
     }
 
-    private static Point landingPoint(Rectangle from, Rectangle to) {
+    /** Returns candidate landing centers on the opposite end of the passage. */
+    public List<Point> traverseCandidates(Rectangle actorBounds) {
+        if (!discovered) return Collections.emptyList();
+        if (actorBounds.intersects(firstEntrance)) {
+            return landingPoints(firstEntrance, secondEntrance);
+        }
+        if (actorBounds.intersects(secondEntrance)) {
+            return landingPoints(secondEntrance, firstEntrance);
+        }
+        return Collections.emptyList();
+    }
+
+    private static List<Point> landingPoints(Rectangle from, Rectangle to) {
         double dx = to.getCenterX() - from.getCenterX();
         double dy = to.getCenterY() - from.getCenterY();
         double distance = Math.hypot(dx, dy);
-        double offset = distance < 0.001 ? 30 : 28;
-        return new Point((int) Math.round(to.getCenterX() + dx / distance * offset),
-            (int) Math.round(to.getCenterY() + dy / distance * offset));
+        double ux = distance < 0.001 ? 1.0 : dx / distance;
+        double uy = distance < 0.001 ? 0.0 : dy / distance;
+        double[][] offsets = {
+            {ux * 30, uy * 30},
+            {-uy * 30, ux * 30},
+            {uy * 30, -ux * 30},
+            {0, 30},
+            {0, -30},
+            {30, 0},
+            {-30, 0}
+        };
+        List<Point> points = new ArrayList<>(offsets.length);
+        for (double[] offset : offsets) {
+            points.add(new Point(
+                (int) Math.round(to.getCenterX() + offset[0]),
+                (int) Math.round(to.getCenterY() + offset[1])));
+        }
+        return points;
     }
 
     public Rectangle getFirstEntrance() { return new Rectangle(firstEntrance); }

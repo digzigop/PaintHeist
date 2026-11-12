@@ -79,6 +79,10 @@ public class Main {
             "PaintHeist startup error", JOptionPane.ERROR_MESSAGE);
     }
 
+    static boolean isFullScreen() {
+        return fullScreen;
+    }
+
     static void toggleFullScreen() {
         if (window == null) return;
 

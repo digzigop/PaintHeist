@@ -1,5 +1,6 @@
 import java.awt.Point;
 import java.awt.Rectangle;
+import java.awt.geom.Point2D;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -22,12 +23,12 @@ public final class GameWorld {
     private double laserAlarmCooldown;
     private double distractionCooldown;
     private double distractionEffectTimer;
+    private double passageCooldown;
     private double distractionX;
     private double distractionY;
     private double facingX;
     private double facingY = -1;
     private int timeLeft;
-    private int copyProgress;
     private MuseumMap.Painting activePainting;
     private MuseumMap.HideSpot nearbyHideSpot;
     private MovableObject nearbyMovableObject;
@@ -42,6 +43,9 @@ public final class GameWorld {
     private boolean gameOver;
     private boolean won;
     private int detectionIncidents;
+    private double copySpeedMultiplier = 1.0;
+    private double throwRange = 190.0;
+    private double switchDisableSeconds = 12.0;
     private String endReason = "Security found you in the gallery.";
     private String message = "";
     private double messageTimer;
@@ -77,6 +81,7 @@ public final class GameWorld {
         if (timeLeft == 0) {
             gameOver = true;
             endReason = "The museum locks down before your escape.";
+            SoundEffects.play(SoundEffects.Cue.BUSTED);
             return;
         }
         noiseCooldown = Math.max(0, noiseCooldown - dt);
@@ -84,6 +89,7 @@ public final class GameWorld {
         laserAlarmCooldown = Math.max(0, laserAlarmCooldown - dt);
         distractionCooldown = Math.max(0, distractionCooldown - dt);
         distractionEffectTimer = Math.max(0, distractionEffectTimer - dt);
+        passageCooldown = Math.max(0, passageCooldown - dt);
         noiseSystem.update(dt);
         messageTimer = Math.max(0, messageTimer - dt);
         if (messageTimer == 0) message = "";
@@ -97,6 +103,7 @@ public final class GameWorld {
             getPlayerCenterX(), getPlayerCenterY());
         if (approachedPassage != null) {
             makeNoise(75, 0.25);
+            SoundEffects.play(SoundEffects.Cue.PASSAGE);
             showMessage("Hidden passage discovered: " + approachedPassage.getName() + ".", 2.8);
         }
         interactPressed = interactPressed || input.interactPressed;
@@ -113,6 +120,7 @@ public final class GameWorld {
             if (interactPressed) {
                 hidingIn = null;
                 makeNoise(105, 0.45);
+                SoundEffects.play(SoundEffects.Cue.HIDE);
                 showMessage("Out of hiding. Keep to the shadows.", 2.0);
             }
         } else if (interactPressed && nearbySecretPassage != null
@@ -120,31 +128,45 @@ public final class GameWorld {
             SecretPassage discovered = map.discoverNearbyPassage(getPlayerCenterX(), getPlayerCenterY());
             if (discovered != null) {
                 makeNoise(115, 0.5);
+                SoundEffects.play(SoundEffects.Cue.PASSAGE);
                 showMessage("Hidden passage discovered: " + discovered.getName() + ".", 2.8);
             }
         } else if (interactPressed && nearbyHideSpot != null) {
             hidingIn = nearbyHideSpot;
             makeNoise(75, 0.25);
+            SoundEffects.play(SoundEffects.Cue.HIDE);
             showMessage("Hidden. Guards cannot see you here.", 2.0);
             moving = false;
         } else {
-            if (interactPressed && map.activateNearbySwitch(getPlayerCenterX(), getPlayerCenterY())) {
+            if (interactPressed && map.activateNearbySwitch(
+                getPlayerCenterX(), getPlayerCenterY(), switchDisableSeconds)) {
                 makeNoise(95, 0.4);
-                showMessage("Security disabled for 12 seconds.", 2.2);
+                SoundEffects.play(SoundEffects.Cue.SWITCH);
+                showMessage("Security disabled for " + (int) Math.round(switchDisableSeconds) + " seconds.", 2.2);
             }
             movePlayer(dt, input);
         }
-        Point passageExit = hidingIn == null ? map.traversePassage(playerBounds()) : null;
-        if (passageExit != null) {
-            double exitX = passageExit.x - PLAYER_WIDTH / 2.0;
-            double exitY = passageExit.y - PLAYER_HEIGHT / 2.0;
-            if (map.canStandAt(exitX, exitY, PLAYER_WIDTH, PLAYER_HEIGHT)) {
-                playerX = exitX;
-                playerY = exitY;
-                makeNoise(85, 0.3);
-                showMessage("You slipped through the hidden passage.", 1.8);
-            } else {
-                showMessage("The far side of the passage is obstructed.", 1.8);
+        if (hidingIn == null && passageCooldown <= 0) {
+            List<Point> candidates = map.traversePassageCandidates(playerBounds());
+            if (!candidates.isEmpty()) {
+                boolean moved = false;
+                for (Point passageExit : candidates) {
+                    double exitX = passageExit.x - PLAYER_WIDTH / 2.0;
+                    double exitY = passageExit.y - PLAYER_HEIGHT / 2.0;
+                    if (map.canStandAt(exitX, exitY, PLAYER_WIDTH, PLAYER_HEIGHT)) {
+                        playerX = exitX;
+                        playerY = exitY;
+                        passageCooldown = 0.6;
+                        makeNoise(85, 0.3);
+                        SoundEffects.play(SoundEffects.Cue.PASSAGE);
+                        showMessage("You slipped through the hidden passage.", 1.8);
+                        moved = true;
+                        break;
+                    }
+                }
+                if (!moved) {
+                    showMessage("The far side of the passage is obstructed.", 1.8);
+                }
             }
         }
 
@@ -157,6 +179,7 @@ public final class GameWorld {
                 detectionIncidents++;
                 suspicion = Math.min(100, suspicion + 10);
                 makeNoiseAt(camera.getX(), camera.getY(), 360, 1.0, "camera alarm");
+                SoundEffects.play(SoundEffects.Cue.ALERT);
                 showMessage("SECURITY CAMERA ALERT! Break line of sight or disable security.", 3.2);
             }
         }
@@ -166,26 +189,28 @@ public final class GameWorld {
         }
 
         activePainting = findNearbyPainting();
+        MuseumMap.Painting copyingNow = null;
         if (activePainting != null && !activePainting.isStolen() && hidingIn == null) {
-            if (input.interact) {
-                copyProgress = Math.min(100, copyProgress + (int) Math.ceil(dt * 100 / 3.2));
+            if (input.interact && !activePainting.isCopied()) {
+                copyingNow = activePainting;
+                activePainting.copyProgress = Math.min(100,
+                    activePainting.copyProgress + dt * copySpeedMultiplier * 100.0 / 3.2);
                 if (noiseCooldown <= 0) {
                     makeNoise(150, 0.65);
                     noiseCooldown = 1.1;
                 }
-                if (copyProgress >= 100 && !activePainting.isCopied()) {
+                if (activePainting.copyProgress >= 100) {
                     activePainting.copied = true;
                     activePainting.quality = Math.max(65, Math.min(99, 86 + (int) (12 - suspicion / 9)));
-                    showMessage("Copy complete. Press F to swap the original.", 2.5);
+                    SoundEffects.play(SoundEffects.Cue.COPY_COMPLETE);
+                    showMessage("Copy complete (" + activePainting.quality + "%). Press F to swap.", 2.5);
                 }
-            } else if (!activePainting.isCopied()) {
-                copyProgress = Math.max(0, copyProgress - (int) Math.ceil(dt * 14));
             }
             if (stealPressed && activePainting.isCopied()) {
                 activePainting.stolen = true;
                 activePainting.discoveryTime = Math.max(14, 31 - activePainting.quality * 0.12);
                 makeNoise(225, 0.9);
-                copyProgress = 0;
+                SoundEffects.play(SoundEffects.Cue.SWAP);
                 showMessage("Original secured. The fake is in place.", 2.8);
                 activePainting = null;
             } else if (stealPressed && !activePainting.isCopied()) {
@@ -194,6 +219,11 @@ public final class GameWorld {
         } else if (activePainting != null && activePainting.isStolen() && hidingIn == null && interactPressed) {
             showMessage("Replica inspection: " + activePainting.getQuality()
                 + "% match. The original is safely in your bag.", 2.8);
+        }
+        for (MuseumMap.Painting painting : map.getPaintings()) {
+            if (!painting.isCopied() && painting != copyingNow && painting.copyProgress > 0) {
+                painting.copyProgress = Math.max(0, painting.copyProgress - dt * 12.0);
+            }
         }
 
         updateFakeDiscoveries(dt);
@@ -206,12 +236,14 @@ public final class GameWorld {
                 noise == null ? 0 : noise.getY(), noise == null ? 0 : noise.getRadius());
             if (previousState != Guard.State.CHASE && guard.getState() == Guard.State.CHASE) {
                 detectionIncidents++;
+                SoundEffects.play(SoundEffects.Cue.ALERT);
             }
             if (guard.isPlayerVisible()) visibleGuards++;
             if (hidingIn == null && playerBounds().intersects(
                 new Rectangle((int) guard.getX(), (int) guard.getY(), Guard.WIDTH, Guard.HEIGHT))) {
                 gameOver = true;
                 endReason = "A guard caught you in the gallery.";
+                SoundEffects.play(SoundEffects.Cue.BUSTED);
             }
         }
         LaserBarrier activeLaser = map.getActiveLaserContact(playerBounds());
@@ -221,11 +253,15 @@ public final class GameWorld {
             if (suspicion >= 100) {
                 gameOver = true;
                 endReason = "Security identified you and sealed the museum.";
+                SoundEffects.play(SoundEffects.Cue.BUSTED);
             }
         } else {
             suspicion = Math.max(0, suspicion - dt * 5.5);
         }
-        if (hidingIn == null && getStolenCount() == map.getPaintingCount() && isAtAnyExit()) won = true;
+        if (hidingIn == null && getStolenCount() == map.getPaintingCount() && isAtAnyExit()) {
+            won = true;
+            SoundEffects.play(SoundEffects.Cue.VICTORY);
+        }
         interactPressed = false;
         stealPressed = false;
         distractPressed = false;
@@ -296,6 +332,7 @@ public final class GameWorld {
         if (laserAlarmCooldown > 0) return;
         Rectangle bounds = barrier.getBounds();
         makeNoiseAt(bounds.getCenterX(), bounds.getCenterY(), 390, 1.2, "laser alarm");
+        SoundEffects.play(SoundEffects.Cue.ALERT);
         suspicion = Math.min(100, suspicion + 18);
         detectionIncidents++;
         laserAlarmCooldown = 1.25;
@@ -307,11 +344,12 @@ public final class GameWorld {
             showMessage("No distraction ready for " + (int) Math.ceil(distractionCooldown) + "s.", 1.5);
             return;
         }
-        distractionX = Math.max(35, Math.min(MuseumMap.WIDTH - 35,
-            getPlayerCenterX() + facingX * 190));
-        distractionY = Math.max(105, Math.min(MuseumMap.HEIGHT - 35,
-            getPlayerCenterY() + facingY * 190));
+        Point2D.Double target = map.getThrowTarget(
+            getPlayerCenterX(), getPlayerCenterY(), facingX, facingY, throwRange);
+        distractionX = target.x;
+        distractionY = target.y;
         makeNoiseAt(distractionX, distractionY, 360, 1.1, "thrown distraction");
+        SoundEffects.play(SoundEffects.Cue.DISTRACT);
         distractionEffectTimer = 1.2;
         distractionCooldown = 5.0;
         showMessage("Distraction thrown. Guards will investigate the sound.", 2.2);
@@ -356,6 +394,8 @@ public final class GameWorld {
                     if (painting.nearbyGuardTime >= 2.5) {
                         painting.discovered = true;
                         suspicion = Math.min(100, suspicion + 28);
+                        alertNearestGuardToFake(painting);
+                        SoundEffects.play(SoundEffects.Cue.ALERT);
                         showMessage("A guard spotted a fake: " + painting.getName() + ".", 3.2);
                     }
                     break;
@@ -365,9 +405,27 @@ public final class GameWorld {
             if (painting.discoveryTime <= 0 && !painting.isDiscovered()) {
                 painting.discovered = true;
                 suspicion = Math.min(100, suspicion + 18);
+                alertNearestGuardToFake(painting);
+                SoundEffects.play(SoundEffects.Cue.ALERT);
                 showMessage("Museum staff identified a weak copy.", 3.0);
             }
         }
+    }
+
+    private void alertNearestGuardToFake(MuseumMap.Painting painting) {
+        double targetX = painting.getX() + MuseumMap.Painting.WIDTH / 2.0 - Guard.WIDTH / 2.0;
+        double targetY = painting.getY() + MuseumMap.Painting.HEIGHT + 12.0;
+        Guard nearest = null;
+        double bestDist = Double.MAX_VALUE;
+        for (Guard guard : guards) {
+            if (guard.getState() == Guard.State.CHASE) continue;
+            double dist = Point.distance(guard.centerX(), guard.centerY(), targetX, targetY);
+            if (dist < bestDist) {
+                bestDist = dist;
+                nearest = guard;
+            }
+        }
+        if (nearest != null) nearest.setSearchTarget(targetX, targetY);
     }
 
     private void showMessage(String text, double seconds) {
@@ -401,7 +459,17 @@ public final class GameWorld {
     public NoiseSystem getNoiseSystem() { return noiseSystem; }
     public int getSuspicion() { return (int) Math.round(suspicion); }
     public int getTimeLeft() { return timeLeft; }
-    public int getCopyProgress() { return activePainting != null && !activePainting.isCopied() ? copyProgress : 0; }
+    public void applyUpgrades(boolean fastCopy, boolean longThrow, boolean longSwitch) {
+        copySpeedMultiplier = fastCopy ? 1.25 : 1.0;
+        throwRange = longThrow ? 250.0 : 190.0;
+        switchDisableSeconds = longSwitch ? 16.0 : 12.0;
+    }
+
+    public int getCopyProgress() {
+        return activePainting != null && !activePainting.isCopied() ? activePainting.getCopyProgress() : 0;
+    }
+    public MuseumMap.Painting getActivePainting() { return activePainting; }
+    public MuseumMap.HideSpot getHidingIn() { return hidingIn; }
 
     public int getStolenCount() {
         int count = 0;
@@ -458,8 +526,9 @@ public final class GameWorld {
                 return "E  INSPECT REPLICA  -  QUALITY " + activePainting.getQuality() + "%";
             }
             if (activePainting.isCopied()) return "F  STEAL " + activePainting.getName().toUpperCase() + "  /  PLACE THE FAKE";
+            int paintingCopy = activePainting.getCopyProgress();
             return "HOLD E  COPY " + activePainting.getName().toUpperCase()
-                + (copyProgress > 0 ? "  -  " + copyProgress + "%" : "");
+                + (paintingCopy > 0 ? "  -  " + paintingCopy + "%" : "");
         }
         if (isAtAnyExit() && getStolenCount() < map.getPaintingCount()) {
             return "EXIT LOCKED  -  SWAP ALL " + map.getPaintingCount() + " PAINTINGS FIRST";
